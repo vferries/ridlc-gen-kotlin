@@ -1,0 +1,31 @@
+scheme = "semver"
+strict = true
+
+scopes = [
+  "repo",
+  "docs",
+  "conformance",
+  "ridlc-gen-kotlin",
+  "ridl-rt-kt",
+  "ridl-rt-kt-loopback",
+  "ridl-rt-kt-coroutines",
+  "samples",
+  "ci",
+]
+
+types = [
+  "feat",
+  "fix",
+  "docs",
+  "style",
+  "refactor",
+  "perf",
+  "test",
+  "chore",
+  "ci",
+  "build",
+  "revert",
+]
+
+[versioning]
+tag_prefix = "v"
