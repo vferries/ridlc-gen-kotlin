@@ -35,7 +35,17 @@ done
 
 while IFS= read -r -d '' tracked_path; do
   case "$tracked_path" in
-    *.kt|*.java|*.rs|*/Cargo.toml|Cargo.toml|*/build.gradle*|build.gradle*|*/pom.xml|pom.xml|*/gradlew|gradlew)
+    *.kt|*.kts|*.java|*.rs|\
+    Cargo.toml|*/Cargo.toml|\
+    build.gradle*|*/build.gradle*|settings.gradle*|*/settings.gradle*|\
+    pom.xml|*/pom.xml|\
+    gradlew|*/gradlew|gradlew.bat|*/gradlew.bat|\
+    mvnw|*/mvnw|mvnw.cmd|*/mvnw.cmd|\
+    .gradle/*|*/.gradle/*|\
+    build/*|*/build/*|out/*|*/out/*|target/*|*/target/*|\
+    generated/*|*/generated/*|generated-sources/*|*/generated-sources/*|\
+    gen/*|*/gen/*|dist/*|*/dist/*|\
+    *.class|*.jar|*.aar|*.war|*.ear|*.kotlin_module|*.pom|*.module)
       printf 'forbidden tracked file: %s\n' "$tracked_path" >&2
       exit 1
       ;;
