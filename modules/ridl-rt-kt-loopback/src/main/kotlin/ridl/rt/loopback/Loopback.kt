@@ -1,0 +1,197 @@
+// `ridl-rt-kt-loopback`, the in-process reference runtime: the spelling of
+// `crates/ridl-loopback/src/lib.rs` (docs/design.md §3, §6).
+package ridl.rt.loopback
+
+import ridl.rt.contract.CatalogRef
+import ridl.rt.contract.InterfaceNo
+import ridl.rt.contract.Ordinal
+import ridl.rt.port.Caller
+import ridl.rt.port.Changed
+import ridl.rt.port.Claim
+import ridl.rt.port.ClaimId
+import ridl.rt.port.Clock
+import ridl.rt.port.CoherentSignals
+import ridl.rt.port.Correlation
+import ridl.rt.port.EventSink
+import ridl.rt.port.EventSource
+import ridl.rt.port.FixedReader
+import ridl.rt.port.Handler
+import ridl.rt.port.RawOccurrence
+import ridl.rt.port.RawSample
+import ridl.rt.port.ScannableSignals
+import ridl.rt.port.SignalWriter
+import ridl.rt.port.Wakeable
+import ridl.rt.port.Watermark
+import ridl.rt.sample.Duration
+import ridl.rt.sample.Timestamp
+import java.nio.ByteBuffer
+
+/** The six role handles of one runtime, as [Loopback.split] hands them out. */
+public class Handles internal constructor(
+    /** `Attached`, `Clock`, `SignalReader`, `FixedReader`, `ScannableSignals` and `CoherentSignals`. */
+    public val reader: ReaderHandle,
+    /** `SignalWriter`. */
+    public val writer: WriterHandle,
+    /** `EventSource`. */
+    public val source: SourceHandle,
+    /** `EventSink`. */
+    public val sink: SinkHandle,
+    /** `Caller`. */
+    public val caller: CallerHandle,
+    /** `Handler`. */
+    public val handler: HandlerHandle,
+)
+
+/**
+ * The in-process reference runtime: every port of `ridl-rt-kt` over one
+ * in-memory store, and the aggregate handle that implements all eleven port
+ * interfaces by delegating to the six role handles it holds. It is what a
+ * generated `Client`, `Publisher` or `dispatch` is built over in a test.
+ *
+ * It is not a transport — nothing leaves the process — and not a checker:
+ * payload bytes are opaque to it. It holds no catalog descriptor, so it
+ * never reports `NotOwner`, never a `Contract` error except from an
+ * unprovisioned [readFixed], and every value's freshness is `Unbounded`.
+ * Nothing detaches and nothing is bounded, so `Detached`, `Busy` and
+ * `TooLarge` never appear outside [failNextSettle].
+ *
+ * The catalog is carried and never compared: checking it against an
+ * interface's own is a generated face's job (ADR-0021 decision 3).
+ *
+ * It also presents [Wakeable], Kotlin's own extension (docs/design.md §3): a
+ * callback registered with [onChange] runs after every commit, raise, send
+ * and settlement on any handle of this runtime.
+ */
+public class Loopback(
+    override val catalog: CatalogRef,
+) : Clock, SignalWriter, EventSource, EventSink, Caller, Handler, FixedReader, ScannableSignals, CoherentSignals,
+    Wakeable {
+    private val store = Store()
+    private var held: Handles? = Handles(
+        reader = ReaderHandle(store, catalog),
+        writer = WriterHandle(store, catalog),
+        source = SourceHandle(store, catalog),
+        sink = SinkHandle(store, catalog),
+        caller = CallerHandle(store, catalog),
+        handler = HandlerHandle(store, catalog),
+    )
+
+    private val handles: Handles
+        get() = checkNotNull(held) { "this Loopback was split; use the handles split() returned" }
+
+    /**
+     * Hands out the six role handles this aggregate holds, all over the same
+     * store. The aggregate's own port methods refuse afterwards, as the Rust
+     * `split` consumes the aggregate; [reader], [writer] and the other
+     * factories, [advance], [provisionFixed] and [failNextSettle] still work.
+     */
+    public fun split(): Handles = handles.also { held = null }
+
+    /** An additional reader handle on the same store. */
+    public fun reader(): ReaderHandle = ReaderHandle(store, catalog)
+
+    /** An additional writer handle, with its own staging area and sequence counters. */
+    public fun writer(): WriterHandle = WriterHandle(store, catalog)
+
+    /** An additional event source, with its own subscription set and queue. */
+    public fun source(): SourceHandle = SourceHandle(store, catalog)
+
+    /** An additional event sink, with its own sequence counters. */
+    public fun sink(): SinkHandle = SinkHandle(store, catalog)
+
+    /** An additional caller, with its own sequence counter (driftsys/ridl#308). */
+    public fun caller(): CallerHandle = CallerHandle(store, catalog)
+
+    /**
+     * An additional handler. Every handler draws from the one queue of
+     * waiting calls, filtered by what it has served.
+     */
+    public fun handler(): HandlerHandle = HandlerHandle(store, catalog)
+
+    /**
+     * Advances the clock by [by]. The clock is a counter only this moves, so
+     * a round trip produces the same timestamps on every run; it saturates
+     * rather than overflowing.
+     *
+     * @throws IllegalArgumentException when [by] is negative.
+     */
+    public fun advance(by: Duration) {
+        store.locked { advance(by) }
+    }
+
+    /**
+     * Supplies the value of a `fixed` (ridl §8). Until one is provisioned,
+     * reading it throws `ReadError.Contract(Contract.UnknownInteraction)`.
+     */
+    public fun provisionFixed(iface: InterfaceNo, ord: Ordinal, bytes: ByteBuffer) {
+        val copy = bytes.remainingBytes()
+        store.locked { provisionFixed(Key(iface, ord), copy) }
+    }
+
+    /**
+     * Makes the next `settle` of a claim that exists throw
+     * `SettleError.TooLarge` and record no outcome: the one fault this
+     * runtime injects, so the generated `dispatch`'s count of accepted
+     * settlements can be tested.
+     */
+    public fun failNextSettle() {
+        store.locked { failNextSettle() }
+    }
+
+    override fun onChange(callback: () -> Unit): AutoCloseable = store.addWaker(callback)
+
+    // The eleven port implementations, each one a delegation.
+
+    override fun now(): Timestamp = handles.reader.now()
+
+    override fun read(iface: InterfaceNo, ord: Ordinal, out: ByteBuffer): RawSample =
+        handles.reader.read(iface, ord, out)
+
+    override fun readFixed(iface: InterfaceNo, ord: Ordinal, out: ByteBuffer): Int =
+        handles.reader.readFixed(iface, ord, out)
+
+    override fun generation(iface: InterfaceNo): ULong = handles.reader.generation(iface)
+
+    override fun scan(marks: Array<Watermark>, out: Array<Changed?>): Int = handles.reader.scan(marks, out)
+
+    override fun readCoherent(
+        iface: InterfaceNo,
+        ords: List<Ordinal>,
+        out: ByteBuffer,
+        samples: Array<RawSample?>,
+    ): Int = handles.reader.readCoherent(iface, ords, out, samples)
+
+    override fun set(iface: InterfaceNo, ord: Ordinal, bytes: ByteBuffer): Unit = handles.writer.set(iface, ord, bytes)
+
+    override fun invalidate(iface: InterfaceNo, ord: Ordinal): Unit = handles.writer.invalidate(iface, ord)
+
+    override fun touch(iface: InterfaceNo, ord: Ordinal): Unit = handles.writer.touch(iface, ord)
+
+    override fun commit(): Unit = handles.writer.commit()
+
+    override fun subscribe(iface: InterfaceNo, ords: List<Ordinal>): Unit = handles.source.subscribe(iface, ords)
+
+    override fun unsubscribe(iface: InterfaceNo, ords: List<Ordinal>): Unit = handles.source.unsubscribe(iface, ords)
+
+    override fun next(out: ByteBuffer): RawOccurrence? = handles.source.next(out)
+
+    override fun raise(iface: InterfaceNo, ord: Ordinal, bytes: ByteBuffer): Unit = handles.sink.raise(iface, ord, bytes)
+
+    override fun command(iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation =
+        handles.caller.command(iface, ord, args)
+
+    override fun query(iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation =
+        handles.caller.query(iface, ord, args)
+
+    override fun ack(c: Correlation): Result<Unit>? = handles.caller.ack(c)
+
+    override fun reply(c: Correlation, out: ByteBuffer): Result<Int>? = handles.caller.reply(c, out)
+
+    override fun forget(c: Correlation): Unit = handles.caller.forget(c)
+
+    override fun serve(iface: InterfaceNo, ords: List<Ordinal>): Unit = handles.handler.serve(iface, ords)
+
+    override fun nextClaim(out: ByteBuffer): Claim? = handles.handler.nextClaim(out)
+
+    override fun settle(claim: ClaimId, outcome: Result<ByteBuffer>): Unit = handles.handler.settle(claim, outcome)
+}

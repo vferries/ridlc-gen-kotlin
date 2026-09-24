@@ -7,7 +7,9 @@
 //
 // - where a Rust method takes `out: &mut [u8]` and returns a length, the
 //   Kotlin method takes a `ByteBuffer`, writes from its position and advances
-//   it, and still reports the length;
+//   it, and still reports the length. Where a Rust method takes `&[u8]`, the
+//   Kotlin method reads the buffer from its position to its limit and leaves
+//   the position where it was, as a borrowed slice is left;
 // - where a Rust method returns `Result<T, E>`, the Kotlin method returns `T`
 //   and throws `E` (D-K3). A state that is not a failure — an outcome not yet
 //   known, no occurrence waiting — is a `null`.

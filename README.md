@@ -26,10 +26,11 @@ whose records it rests on; a change to one is made to both.
 
 ## Status
 
-Stages K0, K1a and K2a of the design's §8: the Gradle build and CI, the
-`ridl-rt-kt` correspondence table as code, and the plugin's reader and launcher
-answering a request with an empty response. Each module README states its own
-stage and where its code departs from the design.
+Stages K0, K1a, K1c and K2a of the design's §8: the Gradle build and CI, the
+`ridl-rt-kt` correspondence table as code, the in-process loopback runtime, and
+the plugin's reader and launcher answering a request with an empty response.
+Each module README states its own stage and where its code departs from the
+design.
 
 ## Building
 
