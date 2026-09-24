@@ -1,19 +1,20 @@
 # ridlc-gen-kotlin
 
-`ridlc-gen-kotlin` is the language-neutral repository home for five planned
-modules and the `samples/cabin` demonstration:
+The RIDL Kotlin plugin and its runtime library: `ridl build --plugin kotlin`
+runs `ridlc-gen-kotlin`, which reads a package's lowered model and generates
+Kotlin value objects, codecs and faces over `ridl-rt-kt`.
 
-- [`ridlc-gen-kotlin`](modules/ridlc-gen-kotlin/README.md) — the future RIDL
-  generator plugin executable.
-- [`ridl-rt-kt`](modules/ridl-rt-kt/README.md) — the future Kotlin runtime
-  contract.
-- [`ridl-rt-kt-loopback`](modules/ridl-rt-kt-loopback/README.md) — the future
-  in-process runtime used by tests.
+- [`ridlc-gen-kotlin`](modules/ridlc-gen-kotlin/README.md) — the generator
+  plugin executable.
+- [`ridl-rt-kt`](modules/ridl-rt-kt/README.md) — the Kotlin runtime contract,
+  the spelling of `ridl-rt`.
+- [`ridl-rt-kt-loopback`](modules/ridl-rt-kt-loopback/README.md) — the
+  in-process runtime the tests run over.
 - [`ridl-rt-kt-coroutines`](modules/ridl-rt-kt-coroutines/README.md) — the
-  future coroutine adapter over the runtime contract.
-- [`conformance`](modules/conformance/README.md) — the future pinned RIDL
-  release and cross-module conformance suite.
-- [`samples/cabin`](samples/cabin/README.md) — the future JVM demonstration.
+  coroutine adapter over the runtime contract.
+- [`conformance`](modules/conformance/README.md) — the pinned `ridl` release,
+  the corpus, and the tests that run the plugin from outside.
+- [`samples/cabin`](samples/cabin/README.md) — the JVM demonstration.
 
 ## Design
 
@@ -23,14 +24,27 @@ the face is [`docs/design.md`](docs/design.md). It is the same text as
 [driftsys/ridl](https://github.com/driftsys/ridl), the toolchain repository
 whose records it rests on; a change to one is made to both.
 
-## Scaffold status
+## Status
 
-This scaffold contains no implementation. It has no Kotlin, Rust, runtime,
-generator, or generated source, and does not define a language-specific build
-toolchain. The module READMEs describe the planned boundaries and status.
+Stages K0, K1a and K2a of the design's §8: the Gradle build and CI, the
+`ridl-rt-kt` correspondence table as code, and the plugin's reader and launcher
+answering a request with an empty response. Each module README states its own
+stage and where its code departs from the design.
 
-The root command surface is provided by Just. Repository checks use Git-std,
-Prim, and Just only; future module toolchains remain inside their modules.
+## Building
 
-The repository is licensed under the root [MIT License](LICENSE). Future module
-READMEs must refer to this license rather than adding another license file.
+A JDK 17 or later, [Just](https://just.systems), Prim and Git-std.
+`just
+bootstrap` checks for them.
+
+```sh
+just build     # formatting, repository checks, every Gradle check, assemble
+just test      # the Gradle tests alone
+just dist      # the plugin distribution under modules/ridlc-gen-kotlin/build
+```
+
+The conformance tests download the pinned `ridl` release on first run; set
+`RIDL_BIN` to an installed `ridl` to run them offline.
+
+The repository is licensed under the root [MIT License](LICENSE). Module READMEs
+refer to this license rather than adding another license file.
