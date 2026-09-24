@@ -2,9 +2,12 @@
 
 ## Responsibility
 
-This future module defines the in-process runtime used by tests. It depends on
-[`ridl-rt-kt`](../ridl-rt-kt/README.md) for the runtime contract.
+This module is the in-process runtime every test runs over: every port of
+[`ridl-rt-kt`](../ridl-rt-kt/README.md) over a queue and a map, no IO; the
+mirror of `crates/ridl-loopback` (docs/design.md §3, §6). It is a JVM library.
+The repository is licensed under the root [MIT License](../../LICENSE).
 
 ## Status
 
-This module is a placeholder. The in-process runtime is not implemented yet.
+Stage K0: the Gradle module exists and depends on `ridl-rt-kt`; the runtime is
+stage K1c.
