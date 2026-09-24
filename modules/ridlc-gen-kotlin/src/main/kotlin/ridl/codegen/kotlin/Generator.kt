@@ -2,8 +2,10 @@ package ridl.codegen.kotlin
 
 import ridl.codegen.v1.Plugin.CodegenRequest
 import ridl.codegen.v1.Plugin.CodegenResponse
+import ridl.codegen.kotlin.types.TypesEmitter
 import ridl.codegen.v1.Plugin.Diagnostic
 import ridl.codegen.v1.Plugin.DiagnosticSeverity
+import ridl.codegen.v1.Plugin.GeneratedFile
 
 /** The schema this plugin reads (IR specification §7). */
 const val SCHEMA: String = "ridl.codegen.v1"
@@ -23,14 +25,16 @@ object Generator {
             return failure("$PLUGIN reads `$SCHEMA` and the request is `${request.schema}`")
         }
         // Step 3.
-        val parsed = Options.parse(request)
-        if (parsed is Options.Parsed.Refused) {
-            return failure(parsed.messages)
+        val options = when (val parsed = Options.parse(request)) {
+            is Options.Parsed.Refused -> return failure(parsed.messages)
+            is Options.Parsed.Ok -> parsed.options
         }
-        // Step 4: the generators of §4 and §5 land in K2b to K3b and read the
-        // options; until then a request that reads cleanly is answered with
-        // no file.
-        return CodegenResponse.getDefaultInstance()
+        // Step 4: the files. Codec.kt and Faces.kt land in K2c and K3a.
+        val types = TypesEmitter(request.model, options).emit()
+        if (types.errors.isNotEmpty()) return failure(types.errors)
+        return CodegenResponse.newBuilder()
+            .addFiles(GeneratedFile.newBuilder().setPath(types.path).setText(types.text))
+            .build()
     }
 
     private fun failure(vararg messages: String): CodegenResponse = failure(messages.toList())

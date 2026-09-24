@@ -10,6 +10,7 @@ dependencies {
     testImplementation(project(":ridl-rt-kt-loopback"))
     testImplementation(project(":ridl-rt-kt-coroutines"))
     testImplementation(libs.protobuf.java.util)
+    testImplementation(libs.kotlin.compile.testing)
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)

@@ -21,14 +21,16 @@ class RequestTest {
     @TestFactory
     fun `a request the pinned ridl wrote parses`(): List<DynamicTest> = Harness.packages().map { name ->
         DynamicTest.dynamicTest(name) {
-            val json = Harness.capturedRequest(name, work)
-            val request = Wire.readRequest(json)
-            assertEquals(SCHEMA, request.schema)
-            assertEquals(name, request.model.name.segmentsList.last())
-            assertTrue(request.model.declarationsCount > 0, "the model carries the declarations")
-            // Nothing is lost: the parsed request renders back to the same message.
-            val reparsed = Wire.readRequest(JsonFormat.printer().print(request))
-            assertEquals(request, reparsed)
+            val requests = Harness.capturedRequests(name, work.resolve(name))
+            assertTrue(Harness.manifestName(name) in requests, "the package's own request is among them")
+            for ((dotted, json) in requests) {
+                val request = Wire.readRequest(json)
+                assertEquals(SCHEMA, request.schema)
+                assertEquals(dotted, request.model.name.dotted)
+                assertTrue(request.model.declarationsCount > 0, "the model carries the declarations")
+                // Nothing is lost: the parsed request renders back to the same message.
+                assertEquals(request, Wire.readRequest(JsonFormat.printer().print(request)))
+            }
         }
     }
 

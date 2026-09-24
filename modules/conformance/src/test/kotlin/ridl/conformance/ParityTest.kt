@@ -15,8 +15,8 @@ import java.nio.file.Path
  *
  * For every corpus package, `ridl build --plugin kotlin=<script>` writes
  * exactly the files of the same build without the plugin (the default emit)
- * plus the files of the response the script gives when invoked directly on
- * the request that build hands it, byte for byte.
+ * plus the files of the responses the script gives when invoked directly on
+ * the requests that build hands it, byte for byte.
  */
 class ParityTest {
     @TempDir
@@ -25,12 +25,19 @@ class ParityTest {
     @TestFactory
     fun `the plugin through ridl writes what the plugin answers`(): List<DynamicTest> = Harness.packages().map { name ->
         DynamicTest.dynamicTest(name) {
-            val direct = Harness.plugin(Harness.capturedRequest(name, work))
-            assertEquals(0, direct.exit, direct.stderr)
-            val response = Plugin.CodegenResponse.newBuilder().also {
-                com.google.protobuf.util.JsonFormat.parser().merge(direct.stdout, it)
-            }.build()
-            assertTrue(response.diagnosticsList.isEmpty(), response.diagnosticsList.toString())
+            // The dynamic tests of one factory share its temporary directory.
+            val work = work.resolve(name)
+            val answered = Harness.capturedRequests(name, work).values.flatMap { request ->
+                val direct = Harness.plugin(request)
+                assertEquals(0, direct.exit, direct.stderr)
+                val response = Plugin.CodegenResponse.newBuilder().also {
+                    com.google.protobuf.util.JsonFormat.parser().merge(direct.stdout, it)
+                }.build()
+                assertTrue(response.diagnosticsList.isEmpty(), response.diagnosticsList.toString())
+                response.filesList.map { file ->
+                    file.path to if (file.hasText()) file.text.toByteArray() else file.binary.toByteArray()
+                }
+            }.toMap()
 
             val baseline = Harness.files(Harness.build(Harness.copyOf(name, work.resolve("a")), work.resolve("out-a")))
             val hosted = Harness.files(
@@ -41,10 +48,6 @@ class ParityTest {
                     "kotlin=${Harness.plugin}",
                 ),
             )
-            val answered = response.filesList.associate { file ->
-                file.path to if (file.hasText()) file.text.toByteArray() else file.binary.toByteArray()
-            }
-
             assertTrue(answered.keys.none { it in baseline }, "the plugin writes no path the default emit writes")
             val expected = baseline + answered
             assertEquals(expected.keys, hosted.keys)

@@ -1,5 +1,6 @@
 package ridl.conformance
 
+import ridl.codegen.kotlin.Wire
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
@@ -62,20 +63,34 @@ object Harness {
         return out
     }
 
+    /** The package name a corpus directory's `ridl.toml` declares. */
+    fun manifestName(name: String): String =
+        Regex("""(?m)^name\s*=\s*"([^"]+)"""").find(corpus.resolve(name).resolve("ridl.toml").readText())
+            ?.groupValues?.get(1) ?: error("corpus/$name/ridl.toml names no package")
+
     /**
-     * The request the pinned `ridl` writes to a plugin for the package, byte
-     * for byte: a stand-in plugin records its standard input and answers with
-     * an empty response. The IR specification §8's fixture rule.
+     * Every request the pinned `ridl` writes to a plugin for the corpus
+     * package, byte for byte, by the package each is for: the package itself
+     * and each package it reaches that `ridl build` writes too, such as
+     * `ridl.std`. A stand-in plugin records its standard input and answers
+     * with an empty response. The IR specification §8's fixture rule.
      */
-    fun capturedRequest(name: String, work: Path): String {
+    fun capturedRequests(name: String, work: Path): Map<String, String> {
         val pkg = copyOf(name, work)
-        val recorded = work.resolve("request-$name.json")
+        val recorded = work.resolve("requests-$name").createDirectories()
         val capture = work.resolve("capture-$name.sh")
-        capture.writeText("#!/bin/sh\ncat > '${recorded.absolutePathString()}'\nprintf '{}'\n")
+        capture.writeText(
+            "#!/bin/sh\ncat > \"$(mktemp '${recorded.absolutePathString()}/request-XXXXXX')\"\nprintf '{}'\n",
+        )
         Files.setPosixFilePermissions(capture, PosixFilePermissions.fromString("rwxr-xr-x"))
         build(pkg, work.resolve("capture-out-$name"), "--plugin", "kotlin=${capture.absolutePathString()}")
-        return recorded.readText()
+        return recorded.listDirectoryEntries().map { it.readText() }
+            .associateBy { Wire.readRequest(it).model.name.dotted }
     }
+
+    /** The request for the corpus package itself. */
+    fun capturedRequest(name: String, work: Path): String =
+        capturedRequests(name, work).getValue(manifestName(name))
 
     /** Every file under [dir], by `/`-separated relative path. */
     fun files(dir: Path): Map<String, ByteArray> =
