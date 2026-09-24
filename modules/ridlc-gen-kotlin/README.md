@@ -138,3 +138,30 @@ does, a command before its provider method runs and a query after.
   `unsubscribe<Event>`; the Rust face has neither.
 - **A port error is thrown**, and `dispatch` counts a settlement the handler
   refused with a `SettleError` as not accepted, as the Rust one counts an `Err`.
+
+### The AIDL
+
+Per interface the face carries, `aidl/<package path>/I<Iface>.aidl` and
+`I<Iface>Listener.aidl`, and the three parcelables every package shares,
+`aidl/ridl/rt/{Frame,Outcome,CatalogRef}.aidl`, written from templates (D-K2).
+The interface carries the frame, not a typed method per payload (D-K7): a
+command is a `oneway` method taking a `Frame`, acknowledged through the
+listener's `onAck`, and a query a method returning the reply `Frame`.
+
+- **The control plane is on the four highest codes AIDL admits**, 16,777,111 to
+  16,777,114, and each call on its ordinal, as the frame specification §11.2
+  fixes. §5 puts the control plane both on codes 1 to 4 and on "the four codes
+  below the interface's lowest ordinal"; the two disagree, and either collides
+  with cabin's `setLevel` and `average`, ordinals 3 and 4. This is a defect of
+  the design note, for its disposition. An interface with a call at or past
+  16,777,111 is skipped with a warning, as one whose number is past Binder's
+  `LAST_CALL_TRANSACTION` is.
+- **`attach`, `subscribe` and `unsubscribe` answer an `Outcome`**, where §5
+  writes `void`: the frame specification §6.1 and §6.2 answer each with
+  `attached` or `answer`. `attach` also carries the frame version and the
+  encoding tag, which §6.1 requires beside the catalog.
+- **`Outcome`** carries the frame's outcome vocabulary: `accepted`, `reply`,
+  `contract` with the contract error and a violation's type and rule, `corrupt`,
+  and `refused` with the reason of §6.1.
+- **An interface the face does not carry gets no AIDL**, since the binding is
+  built over the face.

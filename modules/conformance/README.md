@@ -67,3 +67,11 @@ number, a settlement the handler refuses, a buffer too short. `kt-values`'
 `Probe` adds a failing `ensure`, a float clause and a signal's own init. A wrong
 comparison operator, a wrong settlement or a missing interface check each turns
 it red.
+
+The test of stage K3b, `AidlTest`: the AIDL of every corpus package with an
+interface is written to `build/aidl`; each call is on its ordinal and the
+control plane on its four codes; and, where the machine has the Android SDK's
+build-tools (`aidl` on `PATH`, or under `$ANDROID_HOME` or `$ANDROID_SDK_ROOT`),
+the `aidl` tool accepts every file. Without them that check is skipped, and the
+CI job that installs them runs it, and `scripts/check-aidl.sh` over the same
+files. Two control methods on one code turns it red.

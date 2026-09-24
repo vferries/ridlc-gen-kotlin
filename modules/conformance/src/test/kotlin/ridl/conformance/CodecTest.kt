@@ -65,7 +65,7 @@ class CodecTest {
     fun `the codec agrees with the Rust codec`(): List<DynamicTest> = Harness.packages().map { name ->
         DynamicTest.dynamicTest(name) {
             val requests = Harness.capturedRequests(name, work.resolve("capture-$name")).values.map(Wire::readRequest)
-            val sources = requests.flatMap { r -> Generator.generate(r).filesList.map { it.path to it.text } }.toMap()
+            val sources = requests.flatMap { r -> Generator.generate(r).filesList.filter { it.path.endsWith(".kt") }.map { it.path to it.text } }.toMap()
             val models: List<Model> = requests.map { it.model }
             val compiled = Compiler.compile(sources + ("roundtrip/RoundTrip.kt" to RoundTrip.source(models)), work.resolve("compile-$name"))
             assertTrue(compiled.ok, compiled.messages)

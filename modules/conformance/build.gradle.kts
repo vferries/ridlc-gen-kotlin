@@ -68,6 +68,7 @@ tasks.test {
         .file("install/ridlc-gen-kotlin/bin/ridlc-gen-kotlin")
     val corpus = layout.projectDirectory.dir("src/test/corpus")
     val spike = layout.buildDirectory.dir("spike")
+    val aidl = layout.buildDirectory.dir("aidl")
     inputs.dir(corpus)
     val release = ridlRelease
     inputs.property("release", release)
@@ -78,6 +79,7 @@ tasks.test {
             "-Dplugin.bin=${plugin.get().asFile.absolutePath}",
             "-Dcorpus.dir=${corpus.asFile.absolutePath}",
             "-Dspike.dir=${spike.get().asFile.absolutePath}",
+            "-Daidl.dir=${aidl.get().asFile.absolutePath}",
         )
     })
 }

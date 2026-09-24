@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Validates every generated `.aidl` file with the Android SDK's `aidl` tool
 # (docs/design.md §7, "The AIDL is valid"). The files are written by the
-# conformance build under modules/conformance/build/aidl; stage K3b generates
-# them, and until then there is nothing to check.
+# conformance tests under modules/conformance/build/aidl (AidlTest), which
+# `just aidl-check` runs first.
 
 set -euo pipefail
 
@@ -20,8 +20,8 @@ if [[ -z "$aidl_tool" ]]; then
 fi
 
 if [[ ! -d "$aidl_root" ]]; then
-  printf 'no generated AIDL to check before stage K3b\n'
-  exit 0
+  printf 'no generated AIDL under %s: run the conformance tests first\n' "$aidl_root" >&2
+  exit 1
 fi
 
 count=0
