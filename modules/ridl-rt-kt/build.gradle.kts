@@ -3,6 +3,8 @@ plugins {
     `java-library`
 }
 
+description = "The RIDL runtime contract for Kotlin: the vocabulary types, the ports and the codec surface."
+
 // §3: the runtime contract depends on nothing but the Kotlin standard library.
 kotlin {
     explicitApi()

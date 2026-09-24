@@ -33,6 +33,11 @@ dist:
     ./gradlew :ridlc-gen-kotlin:shadowDistZip :ridlc-gen-kotlin:shadowDistTar :ridlc-gen-kotlin:installShadowDist
     @echo "modules/ridlc-gen-kotlin/build/install/ridlc-gen-kotlin/bin/ridlc-gen-kotlin"
 
+# The three JVM libraries into the local Maven repository, for a consumer
+# outside this repository — the Binder runtime depends on ridl-rt-kt (§6).
+publish-local:
+    ./gradlew publishToMavenLocal
+
 lint-commits base="main":
     @if git show-ref --verify --quiet "refs/remotes/origin/{{base}}"; then \
       base_ref="origin/{{base}}"; \

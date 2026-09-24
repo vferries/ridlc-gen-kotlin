@@ -27,3 +27,36 @@ subprojects {
         }
     }
 }
+
+// The three JVM libraries are consumed outside this repository: the Binder
+// runtime's own repository depends on `ridl-rt-kt` (docs/design.md §6). Each
+// publishes a Maven artifact with its sources, under the root MIT license.
+// `java-library` selects exactly those three — the generator ships as the
+// `application` distribution instead (§2), and the conformance tests and the
+// sample ship not at all.
+subprojects {
+    plugins.withId("java-library") {
+        apply(plugin = "maven-publish")
+
+        extensions.configure<JavaPluginExtension> {
+            withSourcesJar()
+        }
+
+        val module = project
+        extensions.configure<PublishingExtension> {
+            publications.create<MavenPublication>("maven") {
+                from(module.components["java"])
+                pom {
+                    name.set(module.name)
+                    description.set(module.provider { module.description })
+                    licenses {
+                        license {
+                            name.set("MIT License")
+                            url.set("https://opensource.org/licenses/MIT")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -3,6 +3,8 @@ plugins {
     `java-library`
 }
 
+description = "The suspending adapter over a RIDL port: await, for polling a Wakeable runtime."
+
 kotlin {
     explicitApi()
 }

@@ -3,6 +3,8 @@ plugins {
     `java-library`
 }
 
+description = "The in-process RIDL runtime: every port over a queue and a map, with no IO."
+
 kotlin {
     explicitApi()
 }
