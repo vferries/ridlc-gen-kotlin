@@ -170,6 +170,23 @@ class CorrespondenceTest {
         ),
         Row("ridl_rt::payload::Violation", Violation::class, members = listOf("type_name", "rule")),
         Row("ridl_rt::payload::Rule", Rule::class, variants = listOf("Range", "Step", "Length", "Pattern", "Variant")),
+        // flatbuffers: the free reading functions are `Reader`'s methods, Kotlin's own.
+        Row(
+            "ridl_rt::flatbuffers::Builder", ridl.rt.flatbuffers.Builder::class,
+            members = listOf(
+                "used", "push_u8", "push_i8", "push_u16", "push_i16", "push_u32", "push_i32", "push_u64",
+                "push_i64", "push_f32", "push_f64", "push_offset", "push_string", "push_vector",
+                "push_offset_vector", "push_table", "finish",
+            ),
+        ),
+        Row("ridl_rt::flatbuffers::Pos", ridl.rt.flatbuffers.Pos::class),
+        Row(
+            "ridl_rt::flatbuffers::Field", ridl.rt.flatbuffers.Field::class,
+            variants = listOf("Bool", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "F32", "F64", "Offset"),
+            members = listOf("size"),
+        ),
+        Row("ridl_rt::flatbuffers::TableField", ridl.rt.flatbuffers.TableField::class, members = listOf("slot", "offset", "value")),
+        Row("ridl_rt::flatbuffers::Vector", ridl.rt.flatbuffers.Vector::class, members = listOf("len", "first", "element")),
         // port
         Row("ridl_rt::port::Attached", Attached::class, members = listOf("catalog")),
         Row("ridl_rt::port::Clock", Clock::class, members = listOf("now")),
@@ -257,6 +274,7 @@ class CorrespondenceTest {
             RidlError::class,
             ridl.rt.payload.ConstraintViolation::class,
             ridl.rt.port.Wakeable::class,
+            ridl.rt.flatbuffers.Reader::class,
         )
         return publicTopLevelClasses().map { kclass ->
             DynamicTest.dynamicTest(kclass.qualifiedName!!) {

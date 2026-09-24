@@ -36,3 +36,11 @@ right rule, that enums and enum sets read their declared members and no other,
 and, for `kt-values`, that a struct checks its collections and inline fields.
 Removing the float maximum check, counting UTF-16 units, or dropping an array
 bound from the emitter each turns the probe red.
+
+The test of stage K1b, `SpikeTest`: the cabin package's payload codecs, written
+by hand over `ridl.rt.flatbuffers`, encode the bytes the Rust codec of the
+pinned release encodes (`resources/flatbuffers/cabin-golden.txt`), and a corpus
+of 1,385 mutants of those bytes is refused or decoded exactly as the Rust
+verifier refuses or decodes it (`cabin-rust-verdicts.txt`), never by an
+exception of the JVM's own. How to regenerate both files is in
+[`docs/k1b-flatbuffers-spike.md`](../../docs/k1b-flatbuffers-spike.md).
