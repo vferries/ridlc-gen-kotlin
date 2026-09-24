@@ -50,6 +50,7 @@ application {
 dependencies {
     implementation(project(":ridl-rt-kt"))
     implementation(project(":ridl-rt-kt-loopback"))
+    implementation(project(":ridl-rt-kt-coroutines"))
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

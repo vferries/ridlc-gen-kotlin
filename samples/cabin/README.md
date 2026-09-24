@@ -27,5 +27,7 @@ just demo
 
 ## Status
 
-Stage K4. `just demo` prints `signal ok 21`, `event ok 5`, `command ok 42` and
-`query ok 7`, and `DemoTest` pins those four lines.
+Stages K4 and K5. `just demo` prints `signal ok 21`, `event ok 5`,
+`command ok 42` and `query ok 7`, then `coroutine query ok 7`,
+`coroutine command ok 42` and `coroutine event ok 5`, and `DemoTest` pins those
+seven lines.

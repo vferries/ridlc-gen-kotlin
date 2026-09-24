@@ -25,7 +25,7 @@ import java.nio.ByteBuffer
 
 /** The provider: records the levels it is set to and answers every average with [average]. */
 class CabinService(private val average: Long) : CabinProvider {
-    val levels = mutableListOf<Long>()
+    val levels: MutableList<Long> = java.util.Collections.synchronizedList(mutableListOf())
 
     override fun setLevel(level: Level) {
         levels += level.value
@@ -83,5 +83,5 @@ fun demo(): List<String> {
 }
 
 fun main() {
-    demo().forEach(::println)
+    (demo() + coroutineDemo()).forEach(::println)
 }
