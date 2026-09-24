@@ -153,3 +153,10 @@ public class Reader(source: ByteBuffer) {
         return ByteArray(vector.len).also { buf.duplicate().position(vector.first).get(it) }
     }
 }
+
+/**
+ * What a generated FlatBuffers codec's `verify` returns and its `decode`
+ * takes: a checked buffer and the position of its root table. Kotlin's own,
+ * in place of the Rust codec's `<Type>FbView` per type.
+ */
+public class TableView(public val reader: Reader, public val table: Int)

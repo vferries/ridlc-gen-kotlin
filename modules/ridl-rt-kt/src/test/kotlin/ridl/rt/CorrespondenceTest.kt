@@ -275,6 +275,7 @@ class CorrespondenceTest {
             ridl.rt.payload.ConstraintViolation::class,
             ridl.rt.port.Wakeable::class,
             ridl.rt.flatbuffers.Reader::class,
+            ridl.rt.flatbuffers.TableView::class,
         )
         return publicTopLevelClasses().map { kclass ->
             DynamicTest.dynamicTest(kclass.qualifiedName!!) {

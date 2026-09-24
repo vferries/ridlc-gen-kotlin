@@ -73,7 +73,8 @@ object Harness {
      * package, byte for byte, by the package each is for: the package itself
      * and each package it reaches that `ridl build` writes too, such as
      * `ridl.std`. A stand-in plugin records its standard input and answers
-     * with an empty response. The IR specification §8's fixture rule.
+     * with an empty response. The IR specification §8's fixture rule. Sorted
+     * by package, so what is derived from them comes in one order on every run.
      */
     fun capturedRequests(name: String, work: Path): Map<String, String> {
         val pkg = copyOf(name, work)
@@ -86,6 +87,7 @@ object Harness {
         build(pkg, work.resolve("capture-out-$name"), "--plugin", "kotlin=${capture.absolutePathString()}")
         return recorded.listDirectoryEntries().map { it.readText() }
             .associateBy { Wire.readRequest(it).model.name.dotted }
+            .toSortedMap()
     }
 
     /** The request for the corpus package itself. */

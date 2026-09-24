@@ -47,7 +47,7 @@ class SpikeTest {
 
     private fun codec(): ClassLoader {
         val request = Wire.readRequest(Harness.capturedRequest("cabin", work))
-        val types = Generator.generate(request).filesList.single()
+        val types = Generator.generate(request).filesList.single { it.path.endsWith("/Types.kt") }
         val compiled = Compiler.compile(
             mapOf(types.path to types.text, "spike/CabinCodec.kt" to resource("cabin-codec.kt")),
             work.resolve("compile"),

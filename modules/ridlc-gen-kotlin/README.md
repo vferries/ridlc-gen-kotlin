@@ -12,16 +12,19 @@ licensed under the root [MIT License](../../LICENSE).
 
 ## Status
 
-Stages K2a and K2b: the reader, the launcher, the schema refusal, the option
-parsing, and `<kotlin-package path>/Types.kt`, the value objects of §4, emitted
-with KotlinPoet from the request's model. `Codec.kt` and `Faces.kt` land in K2c
-and K3a. `just dist` builds the distribution, and
+Stages K2a, K2b and K2c: the reader, the launcher, the schema refusal, the
+option parsing, `<kotlin-package path>/Types.kt`, the value objects of §4, and
+`<kotlin-package path>/Codec.kt`, their FlatBuffers codec, both emitted with
+KotlinPoet from the request's model. `Faces.kt` lands in K3a. `just dist` builds
+the distribution, and
 `ridl build --plugin kotlin=<path to bin/ridlc-gen-kotlin>` runs it.
 
 A declaration the plugin cannot spell in Kotlin is refused with one error
 diagnostic naming it, and every refused declaration of the package is reported
 in the one response: a stream (O-K5), a reference that resolves to nothing, two
-tuples spelling one name, an enum with no value, a union with no arm.
+tuples spelling one name, an enum with no value, a union with no arm, and every
+position the Rust codec emitter refuses — a type with no finite FlatBuffers
+bound, a bare `string` or `bytes`, an optional array element or map part.
 
 Tested against ridl `editor-v0.2.2` (`modules/conformance/ridl-release`).
 
@@ -70,3 +73,34 @@ Tested against ridl `editor-v0.2.2` (`modules/conformance/ridl-release`).
 - **A reference into another package** is spelled in that package's dotted name,
   the `kotlin-package` default (O-K2): the model does not say what option the
   other package was generated with.
+
+### `Codec.kt`
+
+`Codec.kt` is the Rust codec emitter of the pinned release spelled in Kotlin,
+over `ridl-rt-kt`'s `ridl.rt.flatbuffers`: one `<Type>Codec` object implementing
+`Payload` per root of the package's FlatBuffers projection, and `internal`
+encode, verify and decode helpers per table-shaped type. It lays a table out as
+the Rust codec does — declaration order, each field at its own alignment — and
+pushes children in the same order, so it writes the same bytes, and verifies in
+the same order, so it reaches the same verdict. The conformance module holds it
+to that over 10,266 buffers (`CodecTest`).
+
+- **O-K1 is taken as option A**, pending its disposition
+  ([`docs/k1b-flatbuffers-spike.md`](../../docs/k1b-flatbuffers-spike.md)), and
+  **D-K5's second half is not followed**: the codec is written over
+  `ridl.rt.flatbuffers`, as the Rust codec is over `ridl_rt::flatbuffers`, not
+  over the classes `flatc --kotlin` generates, so a consumer's build needs no
+  `flatc`.
+- **`verify` refuses three things the Rust verifier accepts**: a float off its
+  `step`, a NaN, and an inline scalar outside its constraints. `decode` builds
+  value objects, whose constructors refuse all three, and must never throw.
+- **A map decodes to a `Map`**, so two entries with one key keep the last, where
+  the Rust codec keeps a `Vec` of pairs.
+- **A vector of booleans** is one byte per element; the Rust codec emitter
+  generates code for it that does not compile (`bool` has no `to_le_bytes`).
+- **The helpers are `internal`**, and a codec reaches another package's helpers
+  by name: the packages of one `ridl build` are compiled into one module, as the
+  Rust backend writes them into one crate.
+- **An exempt root** — one the projection cannot bound because it reaches a type
+  it cannot judge — gets no codec, and the file's header names it, as the Rust
+  codec writes a `__RIDL_FB_NO_CODEC_*` note.

@@ -44,3 +44,14 @@ of 1,385 mutants of those bytes is refused or decoded exactly as the Rust
 verifier refuses or decodes it (`cabin-rust-verdicts.txt`), never by an
 exception of the JVM's own. How to regenerate both files is in
 [`docs/k1b-flatbuffers-spike.md`](../../docs/k1b-flatbuffers-spike.md).
+
+The test of stage K2c, `CodecTest`: for every corpus package, the generated
+`Codec.kt` encodes sample values of every public root, written from the model
+(`RoundTrip`), and a corpus of those buffers and their mutants — 10,266 in all —
+goes through `verify`, `decode` and `encode` again in Kotlin and, once, in the
+Rust codec of the pinned release, whose verdicts are checked in as
+`resources/flatbuffers/<package>-codec-rust-verdicts.txt`. Every sample
+re-encodes to the same bytes in Rust, no buffer meets an exception other than
+`VerifyError`, and every verdict is Rust's except where Kotlin alone refuses a
+step, a NaN or an inline constraint. A wrong table layout, a missing count check
+or a wrong union error each turns it red.

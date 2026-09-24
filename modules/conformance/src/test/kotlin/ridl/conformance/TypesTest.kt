@@ -25,20 +25,20 @@ class TypesTest {
     /** Every package the build of [name] hands the plugin, generated in process. */
     private fun generate(name: String): Generated {
         val requests = Harness.capturedRequests(name, work.resolve("capture-$name")).values.map(Wire::readRequest)
-        val sources = requests.associate { request ->
+        val sources = requests.flatMap { request ->
             val response = Generator.generate(request)
             assertEquals(emptyList<String>(), response.diagnosticsList.map { it.message }, request.model.name.dotted)
-            val file = response.filesList.single()
-            file.path to file.text
-        }
+            response.filesList.map { it.path to it.text }
+        }.toMap()
         return Generated(requests.map { it.model }, sources)
     }
 
     @TestFactory
-    fun `the generated Types kt compiles`(): List<DynamicTest> = Harness.packages().map { name ->
+    fun `the generated Types kt and Codec kt compile`(): List<DynamicTest> = Harness.packages().map { name ->
         DynamicTest.dynamicTest(name) {
             val generated = generate(name)
-            assertTrue(generated.sources.keys.all { it.endsWith("/Types.kt") }, generated.sources.keys.toString())
+            val kinds = generated.sources.keys.map { it.substringAfterLast('/') }.toSet()
+            assertEquals(setOf("Types.kt", "Codec.kt"), kinds, generated.sources.keys.toString())
             val compiled = Compiler.compile(generated.sources, work.resolve("compile-$name"))
             assertTrue(compiled.ok, compiled.messages)
         }

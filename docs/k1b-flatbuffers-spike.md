@@ -152,3 +152,107 @@ fn main() {
     }
 }
 ```
+
+## Regenerating the codec verdicts (K2c)
+
+`CodecTest` compares the generated `Codec.kt` with the Rust codec over every
+corpus package. Its Rust side is one round-trip program per package, written by
+the script below over the crate `ridl build --emit rust` writes for that corpus
+package: each `pkg.Type label hex` line of the corpus is verified, decoded and
+re-encoded, and printed with its verdict. For each package, with the paths
+filled in:
+
+```sh
+ridl build --emit rust --out-dir <crate> modules/conformance/src/test/corpus/<package>
+python3 gen.py <crate> <program> <path to driftsys/ridl>
+cargo build --manifest-path <program>/Cargo.toml
+just test   # writes modules/conformance/build/spike/<package>-codec-corpus.txt
+<program>/target/debug/roundtrip < modules/conformance/build/spike/<package>-codec-corpus.txt \
+  | python3 compact.py > modules/conformance/src/test/resources/flatbuffers/<package>-codec-rust-verdicts.txt
+```
+
+`gen.py`:
+
+```python
+# Writes a Rust round-trip program for one generated crate: every line
+# `pkg.Type label hex` on stdin is verified, decoded and re-encoded by the
+# Rust codec, and printed as `pkg.Type label ok <hex>` or `... err <error>`.
+import re, sys, pathlib
+crate = pathlib.Path(sys.argv[1]); prog = pathlib.Path(sys.argv[2]); ridl = sys.argv[3]
+arms = []
+for f in sorted(crate.glob('*.rs')):
+    if f.name == 'lib.rs': continue
+    pkg = f.stem
+    path = '::'.join(pkg.split('.'))
+    text = f.read_text()
+    for t in re.findall(r'Payload<::ridl_rt::encoding::FlatBuffers>\s+for\s+([A-Za-z0-9_]+)', text):
+        # An internal declaration is `pub(crate)`: unreachable from this program.
+        if re.search(r'pub\(crate\) (struct|enum) ' + t + r'\b', text): continue
+        arms.append(f'        "{pkg}.{t}" => roundtrip::<veh_crate::{path}::{t}>(&b),')
+prog.joinpath('src').mkdir(parents=True, exist_ok=True)
+prog.joinpath('Cargo.toml').write_text(f'''[package]
+name = "roundtrip"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+veh_crate = {{ path = "{crate}", package = "{crate.name.replace('-', '_')}" }}
+ridl-rt = {{ version = "0.2", features = ["flatbuffers"] }}
+
+[patch.crates-io]
+ridl-rt = {{ path = "{ridl}/crates/ridl-rt" }}
+''')
+prog.joinpath('src/main.rs').write_text('''// Verifies, decodes and re-encodes each buffer with the Rust codec.
+use ridl_rt::encoding::FlatBuffers;
+use ridl_rt::payload::{Payload, Ref};
+use std::io::BufRead;
+
+fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
+fn unhex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() }
+
+fn roundtrip<T: Payload<FlatBuffers>>(buf: &[u8]) -> String {
+    match Ref::<T, FlatBuffers>::verify(buf) {
+        Err(e) => format!("err {e:?}"),
+        Ok(r) => {
+            let value = r.decode();
+            let mut out = vec![0u8; 1 << 16];
+            match Ref::<T, FlatBuffers>::encode(&value, &mut out) {
+                Ok(e) => format!("ok {}", hex(e.bytes())),
+                Err(e) => format!("reencode-failed {e:?}"),
+            }
+        }
+    }
+}
+
+fn main() {
+    for line in std::io::stdin().lock().lines() {
+        let line = line.unwrap();
+        let mut parts = line.split_whitespace();
+        let (ty, label, h) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap_or(""));
+        let b = unhex(h);
+        let out = match ty {
+''' + '\n'.join(arms) + '''
+        _ => "unknown-type".to_string(),
+        };
+        println!("{ty} {label} {out}");
+    }
+}
+''')
+print(len(arms), 'types')
+```
+
+`compact.py`:
+
+```python
+# Compacts the Rust round trip's output to the verdicts CodecTest compares:
+# `ok:<first 16 hex of SHA-256 of the re-encoded hex>` or `err:<error>`.
+import hashlib, sys
+for line in sys.stdin:
+    ty, label, rest = line.rstrip('\n').split(' ', 2)
+    if rest.startswith('ok '):
+        print('ok:' + hashlib.sha256(rest[3:].encode()).hexdigest()[:16])
+    elif rest.startswith('err '):
+        print('err:' + rest[4:])
+    else:
+        print('?:' + rest)
+```

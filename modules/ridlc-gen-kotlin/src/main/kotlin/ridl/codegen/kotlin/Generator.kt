@@ -2,6 +2,7 @@ package ridl.codegen.kotlin
 
 import ridl.codegen.v1.Plugin.CodegenRequest
 import ridl.codegen.v1.Plugin.CodegenResponse
+import ridl.codegen.kotlin.types.CodecEmitter
 import ridl.codegen.kotlin.types.TypesEmitter
 import ridl.codegen.v1.Plugin.Diagnostic
 import ridl.codegen.v1.Plugin.DiagnosticSeverity
@@ -29,11 +30,15 @@ object Generator {
             is Options.Parsed.Refused -> return failure(parsed.messages)
             is Options.Parsed.Ok -> parsed.options
         }
-        // Step 4: the files. Codec.kt and Faces.kt land in K2c and K3a.
-        val types = TypesEmitter(request.model, options).emit()
-        if (types.errors.isNotEmpty()) return failure(types.errors)
+        // Step 4: the files. Faces.kt lands in K3a.
+        val files = listOf(
+            TypesEmitter(request.model, options).emit(),
+            CodecEmitter(request.model, options).emit(),
+        )
+        val errors = files.flatMap { it.errors }
+        if (errors.isNotEmpty()) return failure(errors)
         return CodegenResponse.newBuilder()
-            .addFiles(GeneratedFile.newBuilder().setPath(types.path).setText(types.text))
+            .addAllFiles(files.map { GeneratedFile.newBuilder().setPath(it.path).setText(it.text).build() })
             .build()
     }
 
