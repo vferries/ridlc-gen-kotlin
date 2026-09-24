@@ -55,3 +55,15 @@ re-encodes to the same bytes in Rust, no buffer meets an exception other than
 `VerifyError`, and every verdict is Rust's except where Kotlin alone refuses a
 step, a NaN or an inline constraint. A wrong table layout, a missing count check
 or a wrong union error each turns it red.
+
+The test of stage K3a, `FacesTest`: the generated faces of `cabin` and
+`kt-values`, over `ridl-rt-kt-loopback`, driven by the probes of
+`resources/faces/`. Cabin's four interaction kinds round-trip — a signal set and
+read, an event raised and received, a command sent, dispatched and acknowledged,
+a query sent, dispatched and replied — and `dispatch`'s settlement table is
+reached past the client: a failing `require`, a corrupt argument buffer, an
+argument outside its constraints, an unknown ordinal, another interface's
+number, a settlement the handler refuses, a buffer too short. `kt-values`'
+`Probe` adds a failing `ensure`, a float clause and a signal's own init. A wrong
+comparison operator, a wrong settlement or a missing interface check each turns
+it red.

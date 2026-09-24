@@ -6,13 +6,13 @@ Each is copied unchanged from `driftsys/ridl` at the tag in
 the `ridl.toml` of two single-file fixtures, which the ridl tests compile
 without a manifest.
 
-| Directory    | Source at the pinned tag                                             | What it exercises                                                                                         |
-| ------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `cabin`      | `examples/cabin`                                                     | integer ranges, an enum, a struct, the four interaction kinds                                             |
-| `veh-common` | `crates/ridlc/tests/corpus/veh-common`                               | unit floats with a step, constants, an enum set over an enum, a result union, collections, `ridl.std`     |
-| `fb-demo`    | `crates/ridl-backend-rust/tests/fixtures/flatbuffers_roundtrip.ridl` | bytes, a vacuous boolean, an enum set with its own bits, every collection shape, optional composites      |
-| `veh-cruise` | `crates/ridl-backend-proto/tests/fixtures/cruise.ridl`               | a retired enum value, a retired union arm, a map keyed by an inline string                                |
-| `kt-values`  | this repository                                                      | a same-package pattern, a regex constant, a float step from a negative minimum, inline scalar constraints |
+| Directory    | Source at the pinned tag                                             | What it exercises                                                                                                                                                               |
+| ------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cabin`      | `examples/cabin`                                                     | integer ranges, an enum, a struct, the four interaction kinds                                                                                                                   |
+| `veh-common` | `crates/ridlc/tests/corpus/veh-common`                               | unit floats with a step, constants, an enum set over an enum, a result union, collections, `ridl.std`                                                                           |
+| `fb-demo`    | `crates/ridl-backend-rust/tests/fixtures/flatbuffers_roundtrip.ridl` | bytes, a vacuous boolean, an enum set with its own bits, every collection shape, optional composites                                                                            |
+| `veh-cruise` | `crates/ridl-backend-proto/tests/fixtures/cruise.ridl`               | a retired enum value, a retired union arm, a map keyed by an inline string                                                                                                      |
+| `kt-values`  | this repository                                                      | a same-package pattern, a regex constant, a float step from a negative minimum, inline scalar constraints, and `Probe`, an interface whose `require` and `ensure` can both fail |
 
 `veh-common` references `ridl.std`, which `ridl build` writes as a package of
 its own, so the plugin is also run on the standard library's patterned strings

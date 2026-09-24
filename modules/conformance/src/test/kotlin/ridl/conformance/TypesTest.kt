@@ -34,11 +34,15 @@ class TypesTest {
     }
 
     @TestFactory
-    fun `the generated Types kt and Codec kt compile`(): List<DynamicTest> = Harness.packages().map { name ->
+    fun `the generated Types kt, Codec kt and Faces kt compile`(): List<DynamicTest> = Harness.packages().map { name ->
         DynamicTest.dynamicTest(name) {
             val generated = generate(name)
-            val kinds = generated.sources.keys.map { it.substringAfterLast('/') }.toSet()
-            assertEquals(setOf("Types.kt", "Codec.kt"), kinds, generated.sources.keys.toString())
+            for (model in generated.models) {
+                val dir = model.name.dotted.replace('.', '/')
+                val expected = setOf("Types.kt", "Codec.kt") + if (model.interfacesCount > 0) setOf("Faces.kt") else emptySet()
+                val kinds = generated.sources.keys.filter { it.substringBeforeLast('/') == dir }.map { it.substringAfterLast('/') }.toSet()
+                assertEquals(expected, kinds, "${model.name.dotted}: ${generated.sources.keys}")
+            }
             val compiled = Compiler.compile(generated.sources, work.resolve("compile-$name"))
             assertTrue(compiled.ok, compiled.messages)
         }

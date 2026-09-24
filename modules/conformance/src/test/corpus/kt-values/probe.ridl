@@ -1,0 +1,19 @@
+package kt.values
+
+// An interface whose clauses can fail both ways, so the face's settlement
+// table is exercised end to end: cabin's `ensure result >= 0` holds for every
+// `Average`. A float clause, and a signal with its own init.
+interface Probe {
+  signal  offset : Offset = 1.5 @10ms
+  event   moved  : Mode @[100ms..1s]
+  command bump(by: Even) @[..50ms] [
+    require by != 0
+  ]
+  query   half(of: Even): Even @[..200ms] [
+    require of > -10
+    ensure  result < 8
+  ]
+  query   scale(by: Offset): Offset @[..200ms] [
+    require by >= -4.5
+  ]
+}

@@ -26,9 +26,10 @@ whose records it rests on; a change to one is made to both.
 
 ## Status
 
-Stages K0, K1a, K1b, K1c, K2a, K2b and K2c of the design's §8: the Gradle build
-and CI, the `ridl-rt-kt` correspondence table as code, the FlatBuffers verifier
-spike ([`docs/k1b-flatbuffers-spike.md`](docs/k1b-flatbuffers-spike.md), for the
+Stages K0, K1a, K1b, K1c, K2a, K2b, K2c and K3a of the design's §8: the Gradle
+build and CI, the `ridl-rt-kt` correspondence table as code, the FlatBuffers
+verifier spike
+([`docs/k1b-flatbuffers-spike.md`](docs/k1b-flatbuffers-spike.md), for the
 disposition of O-K1), the in-process loopback runtime, the plugin's reader and
 launcher, and the value objects the plugin generates into `Types.kt`. Each
 module README states its own stage and where its code departs from the design.

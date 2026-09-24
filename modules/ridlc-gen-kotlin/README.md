@@ -12,10 +12,11 @@ licensed under the root [MIT License](../../LICENSE).
 
 ## Status
 
-Stages K2a, K2b and K2c: the reader, the launcher, the schema refusal, the
-option parsing, `<kotlin-package path>/Types.kt`, the value objects of §4, and
-`<kotlin-package path>/Codec.kt`, their FlatBuffers codec, both emitted with
-KotlinPoet from the request's model. `Faces.kt` lands in K3a. `just dist` builds
+Stages K2a to K3a: the reader, the launcher, the schema refusal, the option
+parsing, and three files per package in its `kotlin-package`, emitted with
+KotlinPoet from the request's model: `Types.kt`, the value objects of §4;
+`Codec.kt`, their FlatBuffers codec; and `Faces.kt`, the interaction face of §5
+for every declared interface. The AIDL of §5 is stage K3b. `just dist` builds
 the distribution, and
 `ridl build --plugin kotlin=<path to bin/ridlc-gen-kotlin>` runs it.
 
@@ -104,3 +105,36 @@ to that over 10,266 buffers (`CodecTest`).
 - **An exempt root** — one the projection cannot bound because it reaches a type
   it cannot judge — gets no codec, and the file's header names it, as the Rust
   codec writes a `__RIDL_FB_NO_CODEC_*` note.
+
+### `Faces.kt`
+
+Per declared interface, the Rust face of the pinned release spelled in Kotlin
+(ADR-0023): the descriptor `object <Iface> : Interface`, with its `MEMBERS`
+rows, `MAX_BUFFER_SIZE`, `EVENT_SOURCE_BUFFER_SIZE`, one correlation value class
+per call, the `Event` sealed interface and `dispatch`; one descriptor object per
+interaction, `<Iface><Member>`, with its codec and its `require`, `ensure` or
+`init`; `<Iface>Client<P>`, bound to exactly the ports its kinds need;
+`<Iface>Publisher<W>`; and `<Iface>Provider`. `dispatch` settles as the Rust one
+does, a command before its provider method runs and a query after.
+
+- **An interface the face cannot carry is skipped with a warning**, not refused
+  with the error §5 names: a clause outside the narrow translator's one form, a
+  call with other than one named parameter, a reply that is not a named type.
+  The rest of the package is generated, as the Rust pipeline skips such an
+  interface with a `__RIDL_NO_FACE_*` note (E11.14 decision 2).
+- **A channel's init is the signal's own `= value`** when it declares one over a
+  named scalar, else the payload type's typl init, built from the model's `Init`
+  facts. The Rust face always calls the payload's `Default`, and calls the
+  override a follow-up.
+- **A signal with no value reads as its init value under the runtime's
+  provenance**, as ridl §4.4 says. The Rust face verifies the empty buffer and
+  reports `Invalid(Detected(Corrupt))` for a channel never published.
+- **The descriptors are top-level**, `CabinTemperature` beside `Cabin`, as in
+  Rust: nested in `Cabin`, a descriptor named after its signal would shadow the
+  payload type of the same name.
+- **A `PayloadInfo` states its FlatBuffers size**, from the model, where the
+  Rust descriptor writes `None` until E16.2.
+- **The publisher has `touch<Signal>`**, as §5 lists, and the client
+  `unsubscribe<Event>`; the Rust face has neither.
+- **A port error is thrown**, and `dispatch` counts a settlement the handler
+  refused with a `SettleError` as not accepted, as the Rust one counts an `Err`.
