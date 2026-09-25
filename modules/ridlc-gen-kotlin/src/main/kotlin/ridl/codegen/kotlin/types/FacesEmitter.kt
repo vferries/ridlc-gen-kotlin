@@ -482,13 +482,17 @@ class FacesEmitter(private val model: Model, private val options: Options) {
                     FunSpec.builder(m.method).returns(SAMPLE.parameterizedBy(payload.type))
                         .addKdoc(
                             "Reads signal `%L`, with the provenance, freshness and envelope the runtime resolved. A channel " +
-                                "with no value holds its init value; bytes that fail their check read as the init value under " +
+                                "with no value under `Init` or `Invalid(Declared)` holds its init value; bytes that fail their " +
+                                "check, none under any other provenance included, read as the init value under " +
                                 "`Provenance.Invalid` with what was detected.",
                             m.declared,
                         )
                         .addStatement("val buf = %T.allocate(%T.maxSize)", BYTE_BUFFER, payload.codec)
                         .addStatement("val raw = port.read(%L, %L, buf)", number(), ordinal(m))
-                        .beginControlFlow("if (raw.len == 0)")
+                        .beginControlFlow(
+                            "if (raw.len == 0 && (raw.provenance == %T.Init || raw.provenance == %T.Invalid(%T.Declared)))",
+                            PROVENANCE, PROVENANCE, CAUSE,
+                        )
                         .addStatement("return %T(%T.init(), raw.provenance, raw.freshness, raw.envelope)", SAMPLE, m.descriptor)
                         .endControlFlow()
                         .addStatement("return checked(%T, buf.flip()).fold(", payload.codec)

@@ -124,9 +124,6 @@ does, a command before its provider method runs and a query after.
   named scalar, else the payload type's typl init, built from the model's `Init`
   facts. The Rust face always calls the payload's `Default`, and calls the
   override a follow-up.
-- **A signal with no value reads as its init value under the runtime's
-  provenance**, as ridl §4.4 says. The Rust face verifies the empty buffer and
-  reports `Invalid(Detected(Corrupt))` for a channel never published.
 - **The descriptors are top-level**, `CabinTemperature` beside `Cabin`, as in
   Rust: nested in `Cabin`, a descriptor named after its signal would shadow the
   payload type of the same name.

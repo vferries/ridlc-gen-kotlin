@@ -103,6 +103,27 @@ fun probe(): List<String> {
         expectEqual("corrupt signal bytes read as the init value", Temperature.of(0), it.value)
         expectEqual("corrupt signal bytes are detected", Provenance.Invalid(Cause.Detected(Detection.Corrupt)), it.provenance)
     }
+    // No bytes stand for the init value under Init or Invalid(Declared) alone
+    // (frame §5.1); under any other provenance they are checked like any
+    // bytes, as the Rust face does since driftsys/ridl#517.
+    Loopback(Cabin.catalog).let { fresh ->
+        CabinPublisher(fresh).run {
+            invalidateTemperature()
+            commit()
+        }
+        CabinClient(fresh).temperature().let {
+            expectEqual("a signal invalidated before any publication reads its init value", Temperature.of(0), it.value)
+            expectEqual("a signal invalidated before any publication is Invalid(Declared)", Provenance.Invalid(Cause.Declared), it.provenance)
+        }
+    }
+    Loopback(Cabin.catalog).let { fresh ->
+        fresh.set(Cabin.number, Ordinal(1u), ByteBuffer.allocate(0))
+        fresh.commit()
+        CabinClient(fresh).temperature().let {
+            expectEqual("no live signal bytes read as the init value", Temperature.of(0), it.value)
+            expectEqual("no live signal bytes are detected", Provenance.Invalid(Cause.Detected(Detection.Corrupt)), it.provenance)
+        }
+    }
 
     // An event: subscribed, raised, received; a corrupt and an invalid occurrence.
     expect("nothing is waiting before a subscription", client.nextEvent() == null)
