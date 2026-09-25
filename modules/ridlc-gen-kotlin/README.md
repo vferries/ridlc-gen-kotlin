@@ -97,8 +97,6 @@ to that over 10,266 buffers (`CodecTest`).
   value objects, whose constructors refuse all three, and must never throw.
 - **A map decodes to a `Map`**, so two entries with one key keep the last, where
   the Rust codec keeps a `Vec` of pairs.
-- **A vector of booleans** is one byte per element; the Rust codec emitter
-  generates code for it that does not compile (`bool` has no `to_le_bytes`).
 - **The helpers are `internal`**, and a codec reaches another package's helpers
   by name: the packages of one `ridl build` are compiled into one module, as the
   Rust backend writes them into one crate.
