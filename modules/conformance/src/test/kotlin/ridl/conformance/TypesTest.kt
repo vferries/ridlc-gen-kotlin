@@ -28,7 +28,7 @@ class TypesTest {
         val sources = requests.flatMap { request ->
             val response = Generator.generate(request)
             assertEquals(emptyList<String>(), response.diagnosticsList.map { it.message }, request.model.name.dotted)
-            response.filesList.filter { it.path.endsWith(".kt") }.map { it.path to it.text }
+            response.filesList.map { it.path to it.text }
         }.toMap()
         return Generated(requests.map { it.model }, sources)
     }

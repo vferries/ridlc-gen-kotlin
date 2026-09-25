@@ -30,7 +30,7 @@ class FacesTest {
             val sources = requests.flatMap { r ->
                 val response = Generator.generate(r)
                 assertEquals(emptyList<String>(), response.diagnosticsList.map { it.message })
-                response.filesList.filter { it.path.endsWith(".kt") }.map { it.path to it.text }
+                response.filesList.map { it.path to it.text }
             }.toMap()
             val probe = checkNotNull(javaClass.getResource("/faces/$name.kt")).readText()
             val compiled = Compiler.compile(sources + ("faces/$name.kt" to probe), work.resolve("compile-$name"))

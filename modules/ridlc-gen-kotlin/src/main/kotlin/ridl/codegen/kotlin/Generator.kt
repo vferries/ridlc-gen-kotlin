@@ -2,7 +2,6 @@ package ridl.codegen.kotlin
 
 import ridl.codegen.v1.Plugin.CodegenRequest
 import ridl.codegen.v1.Plugin.CodegenResponse
-import ridl.codegen.kotlin.types.AidlEmitter
 import ridl.codegen.kotlin.types.CodecEmitter
 import ridl.codegen.kotlin.types.FacesEmitter
 import ridl.codegen.kotlin.types.TypesEmitter
@@ -37,15 +36,13 @@ object Generator {
         val types = TypesEmitter(request.model, options).emit()
         val codec = CodecEmitter(request.model, options).emit()
         val faces = FacesEmitter(request.model, options).emit()
-        val (aidl, aidlWarnings) = AidlEmitter(request.model, options).emit(faces.faced)
         val errors = types.errors + codec.errors + faces.errors
         if (errors.isNotEmpty()) return failure(errors)
         val files = listOf(types.path to types.text, codec.path to codec.text, faces.path to faces.text)
-            .mapNotNull { (path, text) -> text?.let { GeneratedFile.newBuilder().setPath(path).setText(it).build() } } +
-            aidl.map { GeneratedFile.newBuilder().setPath(it.path).setText(it.text).build() }
+            .mapNotNull { (path, text) -> text?.let { GeneratedFile.newBuilder().setPath(path).setText(it).build() } }
         return CodegenResponse.newBuilder()
             .addAllFiles(files)
-            .addAllDiagnostics((faces.warnings + aidlWarnings).map { diagnostic(DiagnosticSeverity.DIAGNOSTIC_SEVERITY_WARNING, it) })
+            .addAllDiagnostics(faces.warnings.map { diagnostic(DiagnosticSeverity.DIAGNOSTIC_SEVERITY_WARNING, it) })
             .build()
     }
 

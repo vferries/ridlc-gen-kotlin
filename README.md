@@ -26,7 +26,8 @@ whose records it rests on; a change to one is made to both.
 
 ## Status
 
-Every stage of the design's §8, K0 to K5: the Gradle build and CI, the
+Every stage of the design's §8, K0 to K5, except K3b, the AIDL, which is
+withdrawn (driftsys/ridlc-gen-kotlin#4): the Gradle build and CI, the
 `ridl-rt-kt` correspondence table as code, the FlatBuffers verifier spike
 ([`docs/k1b-flatbuffers-spike.md`](docs/k1b-flatbuffers-spike.md), for the
 disposition of O-K1), the in-process loopback runtime, the plugin's reader and

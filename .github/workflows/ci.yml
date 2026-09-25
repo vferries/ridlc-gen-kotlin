@@ -1,7 +1,6 @@
 # The repository gate (docs/design.md §6, stage K0): the JVM job runs every
 # check the Gradle `check` task holds, beside the root formatting and
-# repository checks; the aidl job adds the Android SDK's `aidl` tool and
-# nothing else of the SDK; commit-lint lints the PR's own commits.
+# repository checks; commit-lint lints the PR's own commits.
 name: ci
 
 on:
@@ -19,7 +18,6 @@ concurrency:
 
 env:
   JUST_VERSION: 1.38.0
-  ANDROID_BUILD_TOOLS: 35.0.0
 
 jobs:
   jvm:
@@ -50,28 +48,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: just build
-
-  aidl:
-    name: aidl
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: build-tools;${{ env.ANDROID_BUILD_TOOLS }}
-      - name: install just
-        run: |
-          set -o pipefail
-          mkdir -p "$HOME/.local/bin"
-          curl -fsSL "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$HOME/.local/bin" just
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: just aidl-check
 
   commit-lint:
     name: commit-lint

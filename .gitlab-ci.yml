@@ -5,7 +5,6 @@ stages:
 
 variables:
   JUST_VERSION: "1.38.0"
-  ANDROID_BUILD_TOOLS: "35.0.0"
   GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle-home"
 
 default:
@@ -25,17 +24,6 @@ jvm:
   script:
     - curl -fsSL https://raw.githubusercontent.com/driftsys/prim/main/install.sh | PRIM_INSTALL_DIR="$HOME/.local/bin" bash
     - just build
-
-aidl:
-  stage: verify
-  script:
-    - export ANDROID_HOME="$HOME/android-sdk"
-    - mkdir -p "$ANDROID_HOME/cmdline-tools"
-    - curl -fsSLo /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-    - unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-    - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
-    - '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;${ANDROID_BUILD_TOOLS}"'
-    - just aidl-check
 
 commit-lint:
   stage: verify

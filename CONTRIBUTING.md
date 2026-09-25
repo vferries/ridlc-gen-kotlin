@@ -39,5 +39,4 @@ limit.
 
 Before submitting a change, run `just verify`. This runs commit linting and the
 build gate: formatting, Prim linting, the repository check, every Gradle check
-and the assembly. CI runs the same recipes, plus `just aidl-check` in a job that
-installs the Android SDK build-tools.
+and the assembly. CI runs the same recipes.
