@@ -5,29 +5,32 @@
 package ridl.rt.coroutines
 
 import kotlinx.coroutines.channels.Channel
+import ridl.rt.port.Interest
 import ridl.rt.port.Wakeable
+import ridl.rt.task.Waker
 
 /**
- * Suspends until [poll] answers a value, and returns it.
+ * Suspends until [poll] answers a value, and returns it, woken by [port]
+ * under [interest].
  *
- * [poll] is any polling read of a face: `client.averageReply(c)`,
- * `client.setLevelAck(c)`, `client.nextEvent()`, or a provider's
- * `Cabin.dispatch(...)` mapped to `null` when it settled nothing. It is
- * called once at once, then again after every change [port] reports, until it
- * answers something other than `null`. It must not block.
+ * [poll] is any polling read of a face, with the key its answer changes
+ * under: `client.averageReply(c)` under `Interest.Outcome(c.correlation)`,
+ * `client.nextEvent()` under `Interest.Event(Cabin.number)`, or a provider's
+ * `Cabin.dispatch(...)` mapped to `null` when it settled nothing, under
+ * `Interest.Claim(Cabin.number)`. It must not block.
  *
- * The wake-up is registered before the second poll, so an outcome that
- * arrives between the first poll and the registration is still seen. The
- * registration is closed when this returns, throws or is cancelled. Bound the
- * wait with `withTimeout`: nothing here times out, as nothing in a port does.
+ * Each round registers, then reads, as the `Wakeable` contract requires, so
+ * an outcome that lands between the read and the suspension still wakes it.
+ * One waker serves the whole wait, so the port sees one task registering
+ * again. Bound the wait with `withTimeout`: nothing here times out, as
+ * nothing in a port does.
  */
-public suspend fun <T : Any> await(port: Wakeable, poll: () -> T?): T {
-    poll()?.let { return it }
-    val changed = Channel<Unit>(Channel.CONFLATED)
-    port.onChange { changed.trySend(Unit) }.use {
-        while (true) {
-            poll()?.let { return it }
-            changed.receive()
-        }
+public suspend fun <T : Any> await(port: Wakeable, interest: Interest, poll: () -> T?): T {
+    val woken = Channel<Unit>(Channel.CONFLATED)
+    val waker = Waker { woken.trySend(Unit) }
+    while (true) {
+        port.wakeOn(interest, waker)
+        poll()?.let { return it }
+        woken.receive()
     }
 }

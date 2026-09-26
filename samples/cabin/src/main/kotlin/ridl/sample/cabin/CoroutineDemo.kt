@@ -3,9 +3,11 @@
 // handle of its own, each waiting through ridl-rt-kt-coroutines' `await` for
 // what the loopback reports as changed (docs/design.md §5, O-K3).
 //
-// Every wait is `await(port) { <a polling read of the face> }` at the call
-// site: the face stays the polling one (D-K6), and a call's suspending form is
-// its send and one `await`, with no extension written or generated for it.
+// Every wait is `await(port, <interest>) { <a polling read of the face> }` at
+// the call site, woken by the handle the read goes through under the key its
+// answer changes under: the face stays the polling one (D-K6), and a call's
+// suspending form is its send and one `await`, with no extension written or
+// generated for it.
 package ridl.sample.cabin
 
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import ridl.rt.coroutines.await
 import ridl.rt.loopback.Loopback
+import ridl.rt.port.Interest
 import veh.cabin.Cabin
 import veh.cabin.CabinClient
 import veh.cabin.CabinPublisher
@@ -39,7 +42,9 @@ fun coroutineDemo(): List<String> = runBlocking {
             val handler = port.handler()
             val buffer = ByteBuffer.allocate(Cabin.MAX_BUFFER_SIZE)
             while (isActive) {
-                await(port) { Cabin.dispatch(handler, service, buffer).takeIf { it > 0 } }
+                await(handler, Interest.Claim(Cabin.number)) {
+                    Cabin.dispatch(handler, service, buffer).takeIf { it > 0 }
+                }
                 levels.addAll(service.levels.drain())
             }
         }
@@ -47,7 +52,7 @@ fun coroutineDemo(): List<String> = runBlocking {
         val lines = mutableListOf<String>()
 
         val average = client.average(Window.of(10))
-        lines += "coroutine query ok ${await(port) { client.averageReply(average) }.getOrThrow().value}"
+        lines += "coroutine query ok ${await(port, Interest.Outcome(average.correlation)) { client.averageReply(average) }.getOrThrow().value}"
 
         // A command's acknowledgment is a delivery acknowledgment, settled
         // before the provider's method runs (ridl §6.1), so it says nothing
@@ -55,11 +60,11 @@ fun coroutineDemo(): List<String> = runBlocking {
         // the provider has stopped: cancellation takes effect at its next
         // `await`, after the dispatch pass that called the method.
         val set = client.setLevel(Level.of(42))
-        await(port) { client.setLevelAck(set) }.getOrThrow()
+        await(port, Interest.Outcome(set.correlation)) { client.setLevelAck(set) }.getOrThrow()
 
         client.subscribeWarning()
         CabinPublisher(port).warning(Warning(Level.of(5), Health.WARN))
-        val event = await(port) { client.nextEvent() } as Cabin.Event.Warning
+        val event = await(port, Interest.Event(Cabin.number)) { client.nextEvent() } as Cabin.Event.Warning
 
         provider.cancelAndJoin()
         lines += "coroutine command ok ${levels.single()}"

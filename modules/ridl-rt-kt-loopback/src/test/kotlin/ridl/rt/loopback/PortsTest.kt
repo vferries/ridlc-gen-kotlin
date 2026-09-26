@@ -732,7 +732,7 @@ class PortsTest {
     }
 
     // ---------------------------------------------------------------------
-    // Kotlin's own: the ByteBuffer rule, split, close, and Wakeable.
+    // Kotlin's own: the ByteBuffer rule, split and close.
     // ---------------------------------------------------------------------
 
     @Test
@@ -799,26 +799,6 @@ class PortsTest {
         val claim = rt.nextClaim(out(8))!!
         assertThrows<IllegalArgumentException> { rt.settle(claim.id, Result.failure(RuntimeException("no"))) }
         rt.settle(claim.id, ok())
-    }
-
-    @Test
-    fun `a waker runs after every commit, raise, send and settlement until closed`() {
-        val rt = runtime()
-        var wakes = 0
-        val handle = rt.onChange { wakes += 1 }
-
-        rt.set(iface, ord, bytes(1))
-        assertEquals(0, wakes, "staging is not a change a waiter can see")
-        rt.commit()
-        rt.raise(iface, ord, bytes(1))
-        val correlation = rt.command(iface, ord, bytes(1))
-        rt.settle(rt.nextClaim(out(8))!!.id, ok())
-        assertEquals(4, wakes)
-        assertEquals(Result.success(Unit), rt.ack(correlation))
-
-        handle.close()
-        rt.commit()
-        assertEquals(4, wakes, "a closed waker is not called")
     }
 
     // ---------------------------------------------------------------------

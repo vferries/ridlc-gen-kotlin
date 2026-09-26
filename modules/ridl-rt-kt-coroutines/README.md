@@ -3,29 +3,37 @@
 ## Responsibility
 
 This module is the `suspend` adapter over the polling face (docs/design.md §5,
-D-K6): one function, `await(port: Wakeable, poll: () -> T?): T`, which suspends
+D-K6): one function,
+`await(port: Wakeable, interest: Interest, poll: () -> T?):
+T`, which suspends
 until a polling read of a face answers, woken by the runtime's `Wakeable`
-extension of [`ridl-rt-kt`](../ridl-rt-kt/README.md). It is a JVM library over
-`kotlinx-coroutines-core`. The repository is licensed under the root
-[MIT License](../../LICENSE).
+extension of [`ridl-rt-kt`](../ridl-rt-kt/README.md) under the key the read's
+answer changes under. It is a JVM library over `kotlinx-coroutines-core`. The
+repository is licensed under the root [MIT License](../../LICENSE).
 
 ```kotlin
 val correlation = client.average(Window.of(10))
-val reply = await(port) { client.averageReply(correlation) }
+val reply = await(port, Interest.Outcome(correlation.correlation)) {
+    client.averageReply(correlation)
+}
 ```
 
-`poll` is called once, then again after every change the port reports, until it
-answers something other than `null`. The wake-up is registered before the second
-poll, so an outcome that lands between the two is not lost; the registration is
-closed when `await` returns, throws or is cancelled. A wait is bounded with
-`withTimeout`, as nothing in a port times out.
+Each round registers under `interest`, then calls `poll`, as the `Wakeable`
+contract requires, until `poll` answers something other than `null`; an outcome
+that lands between the read and the suspension still wakes it. One waker serves
+the whole wait, so the port sees one task registering again rather than a new
+one each round. `port` is the handle the read goes through: a provider waiting
+on a handler of its own passes that handler, not the aggregate. A wait is
+bounded with `withTimeout`, as nothing in a port times out.
 
 ## Status
 
-Stage K5. `AwaitTest` pins the five properties above, over a hand-driven
-`Wakeable`; moving the second poll after the first wait turns it red. The cabin
-sample's `CoroutineDemo.kt` runs a consumer and a provider on two threads over
-the loopback with it.
+Stage K5, keyed by driftsys/ridlc-gen-kotlin#5. `AwaitTest` pins the properties
+above over a hand-driven `Wakeable` with one waker per key: a known value after
+one registration and one read, registration before every read, no wake from
+another key, one waker for the whole wait, and a wake from another thread. The
+cabin sample's `CoroutineDemo.kt` runs a consumer and a provider on two threads
+over the loopback with it.
 
 ## O-K3: no `*Await` extension, generated or hand-written
 
@@ -35,11 +43,11 @@ whether they are generated or written by hand in the sample, to be decided by
 writing the sample both ways and keeping the shorter. Measured on the cabin
 sample's two calls:
 
-| Form                                    | Lines at the call sites | Lines written beside them                                                                                                |
-| --------------------------------------- | ----------------------: | ------------------------------------------------------------------------------------------------------------------------ |
-| `await(port) { client.<call>Reply(c) }` |                       4 | none                                                                                                                     |
-| hand-written `<call>Await` extensions   |                       2 | about 4 per call, each taking the port the client keeps private                                                          |
-| generated `<call>Await` extensions      |                       2 | none, but every generated package then depends on `kotlinx-coroutines`, or a third plugin option decides whether it does |
+| Form                                                                     | Lines at the call sites | Lines written beside them                                                                                                |
+| ------------------------------------------------------------------------ | ----------------------: | ------------------------------------------------------------------------------------------------------------------------ |
+| `await(port, Interest.Outcome(c.correlation)) { client.<call>Reply(c) }` |                       4 | none                                                                                                                     |
+| hand-written `<call>Await` extensions                                    |                       2 | about 4 per call, each taking the port the client keeps private                                                          |
+| generated `<call>Await` extensions                                       |                       2 | none, but every generated package then depends on `kotlinx-coroutines`, or a third plugin option decides whether it does |
 
 The recommendation, for disposition, is the first: the generic `await` is the
 whole adapter, the generated face stays free of any coroutine dependency, and a

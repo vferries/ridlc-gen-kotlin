@@ -46,4 +46,11 @@ public sealed class Transport(message: String) : CallError(message) {
 
     /** A payload is not a well-formed encoding. */
     public data object Corrupt : Transport("a payload is not a well-formed encoding")
+
+    /**
+     * The providing runtime refused the call at admission and the caller may
+     * retry later. Crosses the frame as a `response` outcome (frame
+     * specification §9.6).
+     */
+    public data object Busy : Transport("the providing runtime refused the call at admission; retry later")
 }

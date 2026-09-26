@@ -10,10 +10,18 @@
 // | --------------- | ------------------------------------------------------------------------------ | ------------------ |
 // | `ReaderHandle`  | `Clock`, `SignalReader`, `FixedReader`, `ScannableSignals`, `CoherentSignals` | any threads at once |
 // | `WriterHandle`  | `SignalWriter`                                                                 | one thread at a time |
-// | `SourceHandle`  | `EventSource`                                                                  | one thread at a time |
+// | `SourceHandle`  | `EventSource`, `Wakeable`                                                      | one thread at a time |
 // | `SinkHandle`    | `EventSink`                                                                    | one thread at a time |
-// | `CallerHandle`  | `Caller`                                                                       | one thread at a time |
-// | `HandlerHandle` | `Handler`                                                                      | one thread at a time |
+// | `CallerHandle`  | `Caller`, `Clock`, `Wakeable`                                                  | one thread at a time |
+// | `HandlerHandle` | `Handler`, `Wakeable`                                                          | one thread at a time |
+//
+// `Wakeable` is on the three handles a task waits on, each for the keys of its
+// own role: the source for `Interest.Event`, the caller for `Interest.Outcome`
+// and `Interest.Slot`, the handler for `Interest.Claim`. A key a handle's role
+// does not carry is not stored and never woken, because no change of it is
+// visible through that handle. `CallerHandle` carries `Clock` too, because a
+// client that waits for an outcome within a bound reads the clock of the port
+// it calls (ADR-0023 decision 6).
 //
 // Every store access is under the store's monitor, so the reader handle holds
 // no state of its own and is safe from any thread; the other five hold state
@@ -41,16 +49,24 @@ import ridl.rt.port.EventSink
 import ridl.rt.port.EventSource
 import ridl.rt.port.FixedReader
 import ridl.rt.port.Handler
+import ridl.rt.port.Interest
 import ridl.rt.port.RawOccurrence
 import ridl.rt.port.RawSample
 import ridl.rt.port.ScannableSignals
 import ridl.rt.port.SettleError
 import ridl.rt.port.SignalReader
 import ridl.rt.port.SignalWriter
+import ridl.rt.port.Wakeable
 import ridl.rt.port.Watermark
 import ridl.rt.sample.Timestamp
+import ridl.rt.task.Waker
 import java.nio.ByteBuffer
 import java.util.TreeMap
+
+/** Wakes what a store operation returned, after the monitor was left. */
+private fun wake(wakers: Iterable<Waker>) {
+    for (waker in wakers) waker.wake()
+}
 
 /**
  * The read-only port roles: `Attached`, `Clock`, `SignalReader`,
@@ -113,7 +129,6 @@ public class WriterHandle internal constructor(
 
     override fun commit() {
         store.locked { commit(staged, seqs) }
-        store.wake()
     }
 }
 
@@ -122,14 +137,14 @@ public class WriterHandle internal constructor(
  * store under this handle's identity, so each source receives its own copy of
  * every occurrence raised while it is subscribed.
  *
- * [close] removes the queue from the store, which the Rust handle does on
- * drop; a source that is never closed keeps receiving copies until the
- * runtime is collected.
+ * [close] removes the queue and the waiter from the store, which the Rust
+ * handle does on drop; a source that is never closed keeps receiving copies
+ * until the runtime is collected.
  */
 public class SourceHandle internal constructor(
     private val store: Store,
     override val catalog: CatalogRef,
-) : EventSource, AutoCloseable {
+) : EventSource, Wakeable, AutoCloseable {
     private val id: Int = store.locked { openSource() }
 
     override fun subscribe(iface: InterfaceNo, ords: List<Ordinal>) {
@@ -141,6 +156,15 @@ public class SourceHandle internal constructor(
     }
 
     override fun next(out: ByteBuffer): RawOccurrence? = store.locked { nextEvent(id, out) }
+
+    /**
+     * Stores `Interest.Event(iface)`: a `raise` that queues an occurrence of
+     * `iface` for this source wakes it, and an occurrence already queued wakes
+     * it at once. Every other key is not stored.
+     */
+    override fun wakeOn(what: Interest, waker: Waker) {
+        if (what is Interest.Event) wake(store.locked { wakeOnEvent(id, what.iface, waker) })
+    }
 
     override fun close() {
         store.locked { closeSource(id) }
@@ -162,8 +186,7 @@ public class SinkHandle internal constructor(
         val key = Key(iface, ord)
         val seq = (seqs[key] ?: 0u) + 1u
         seqs[key] = seq
-        store.locked { raise(key, bytes.remainingBytes(), seq) }
-        store.wake()
+        wake(store.locked { raise(key, bytes.remainingBytes(), seq) })
     }
 }
 
@@ -175,7 +198,7 @@ public class SinkHandle internal constructor(
 public class CallerHandle internal constructor(
     private val store: Store,
     override val catalog: CatalogRef,
-) : Caller {
+) : Caller, Clock, Wakeable {
     private var seq: ULong = 0u
 
     override fun command(iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation =
@@ -187,7 +210,9 @@ public class CallerHandle internal constructor(
     private fun send(kind: CallKind, iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation {
         seq += 1u
         val next = seq
-        return store.locked { send(kind, Key(iface, ord), args.remainingBytes(), next) }.also { store.wake() }
+        val (correlation, wakers) = store.locked { send(kind, Key(iface, ord), args.remainingBytes(), next) }
+        wake(wakers)
+        return correlation
     }
 
     override fun ack(c: Correlation): Result<Unit>? = store.locked { ack(c) }
@@ -196,6 +221,24 @@ public class CallerHandle internal constructor(
 
     override fun forget(c: Correlation) {
         store.locked { forget(c) }
+    }
+
+    override fun now(): Timestamp = store.locked { now() }
+
+    /**
+     * Stores `Interest.Outcome(c)`: the settlement of `c` wakes it, and an
+     * outcome already known wakes it at once. A correlation the store no
+     * longer holds, never sent or forgotten, is not stored.
+     *
+     * Wakes `Interest.Slot` at once: nothing here is bounded, so a slot is
+     * always free. Every other key is not stored.
+     */
+    override fun wakeOn(what: Interest, waker: Waker) {
+        when (what) {
+            is Interest.Outcome -> wake(store.locked { wakeOnOutcome(what.correlation, waker) })
+            Interest.Slot -> waker.wake()
+            is Interest.Event, is Interest.Claim -> {}
+        }
     }
 }
 
@@ -208,11 +251,14 @@ public class CallerHandle internal constructor(
  * kept because the generated `dispatch` never calls `serve`. A claim belongs
  * to the handler it was presented to, so another handler's `settle` of it
  * throws [SettleError.UnknownClaim].
+ *
+ * [close] removes the handler's waiter from the store, which the Rust handle
+ * does on drop.
  */
 public class HandlerHandle internal constructor(
     private val store: Store,
     override val catalog: CatalogRef,
-) : Handler {
+) : Handler, Wakeable, AutoCloseable {
     private val id: Int = store.locked { openHandler() }
     private val servedKeys = LinkedHashSet<Key>()
 
@@ -224,15 +270,33 @@ public class HandlerHandle internal constructor(
         ords.mapTo(servedKeys) { Key(iface, it) }
     }
 
+    /** The filter `nextClaim` applies: `null` when this handler has served nothing and is presented every call. */
+    private fun filter(): Set<Key>? = servedKeys.takeIf { it.isNotEmpty() }?.toSet()
+
     override fun nextClaim(out: ByteBuffer): Claim? {
-        val filter = servedKeys.takeIf { it.isNotEmpty() }?.toSet()
+        val filter = filter()
         return store.locked { nextClaim(id, filter, out) }
     }
 
     override fun settle(claim: ClaimId, outcome: Result<ByteBuffer>) {
         val stored = outcome.toStored()
-        store.locked { settle(id, claim, stored) }
-        store.wake()
+        store.locked { settle(id, claim, stored) }?.wake()
+    }
+
+    /**
+     * Stores `Interest.Claim(iface)`: a send of a call on `iface` wakes it,
+     * and a call on `iface` this handler would be presented, already waiting,
+     * wakes it at once. Every other key is not stored.
+     */
+    override fun wakeOn(what: Interest, waker: Waker) {
+        if (what is Interest.Claim) {
+            val filter = filter()
+            wake(store.locked { wakeOnClaim(id, what.iface, filter, waker) })
+        }
+    }
+
+    override fun close() {
+        store.locked { closeHandler(id) }
     }
 }
 

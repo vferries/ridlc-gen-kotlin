@@ -96,6 +96,7 @@ class BehaviourTest {
             Transport.Undelivered -> "undelivered"
             Transport.Down -> "down"
             Transport.Corrupt -> "corrupt"
+            Transport.Busy -> "busy"
         }
         assertEquals("precondition", name(Contract.PreconditionFailed))
         assertEquals("corrupt", name(Transport.Corrupt))

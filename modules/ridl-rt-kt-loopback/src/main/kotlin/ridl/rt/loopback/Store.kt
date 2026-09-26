@@ -6,6 +6,13 @@
 // lives on that handle. Every operation below runs under the store's monitor,
 // reads or writes the maps and returns: no port method waits for data while
 // holding it, which is what `ridl.rt.port` requires of every port method.
+//
+// No waker runs under the monitor either. Every operation here that would wake
+// a task returns the wakers instead, and the handle wakes them after leaving
+// the monitor, so a waker that reaches back into this runtime from another
+// thread cannot find the monitor held by the thread that woke it. A waker is
+// stored here although one handle registered it, because another handle's
+// operation wakes it.
 package ridl.rt.loopback
 
 import ridl.rt.contract.InterfaceNo
@@ -27,11 +34,11 @@ import ridl.rt.sample.Envelope
 import ridl.rt.sample.Freshness
 import ridl.rt.sample.Provenance
 import ridl.rt.sample.Timestamp
+import ridl.rt.task.Waker
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
 import java.util.TreeMap
 import java.util.TreeSet
-import java.util.concurrent.CopyOnWriteArrayList
 
 /** One interaction, addressed the way every port method addresses one. */
 internal data class Key(val iface: InterfaceNo, val ord: Ordinal) : Comparable<Key> {
@@ -48,6 +55,42 @@ internal sealed interface Staged {
 }
 
 internal enum class CallKind { Command, Query }
+
+/**
+ * A one-waiter slot: the waker of one task, with the key it waits under.
+ * `register` and `take_if_key` of the Rust store.
+ */
+internal class Waiter<K> {
+    private var key: K? = null
+    private var waker: Waker? = null
+
+    /**
+     * Stores [waker] under [key], and returns the waker it displaced. The same
+     * waker under the same key is the same task registering again, which it
+     * does on every poll: it is kept and nothing is displaced. Under another
+     * key the stored registration is displaced and woken even when the task
+     * is the same, because the slot holds one key and the first would
+     * otherwise never wake it.
+     */
+    fun register(key: K, waker: Waker): Waker? {
+        if (this.key == key && this.waker === waker) return null
+        val displaced = this.waker
+        this.key = key
+        this.waker = waker
+        return displaced
+    }
+
+    /** Takes the waker when it waits under [key], which clears the slot. */
+    fun take(key: K): Waker? {
+        if (waker == null || this.key != key) return null
+        return waker.also { clear() }
+    }
+
+    fun clear() {
+        key = null
+        waker = null
+    }
+}
 
 /**
  * Everything two handles must agree on.
@@ -75,6 +118,9 @@ internal class Store {
     private class SourceState {
         val subscribed = TreeSet<Key>()
         val queue = ArrayDeque<QueuedEvent>()
+
+        /** The source's one `Interest.Event` waiter, with the interface it waits on. */
+        val waiter = Waiter<InterfaceNo>()
     }
 
     /** A presented claim: the call it presented, and the handler holding it. */
@@ -96,6 +142,12 @@ internal class Store {
          * settled. What changes is that `ack` and `reply` answer `null`.
          */
         var forgotten: Boolean = false
+
+        /**
+         * The call's one `Interest.Outcome` waiter. It is kept with the call
+         * rather than on the caller handle, because the correlation is the key.
+         */
+        var waker: Waker? = null
     }
 
     private var now = Timestamp(0)
@@ -117,22 +169,15 @@ internal class Store {
     private var nextClaimId = 0L
     private var nextHandlerId = 0
     private var failNextSettle = false
-    private val wakers = CopyOnWriteArrayList<() -> Unit>()
+
+    /**
+     * Each open handler's one `Interest.Claim` waiter, with the interface it
+     * waits on, from [openHandler] to [closeHandler].
+     */
+    private val claimWaiters = TreeMap<Int, Waiter<InterfaceNo>>()
 
     /** Runs [block] under the store's monitor. */
     inline fun <T> locked(block: Store.() -> T): T = synchronized(this) { block() }
-
-    // -- waking -------------------------------------------------------------
-
-    fun addWaker(callback: () -> Unit): AutoCloseable {
-        wakers += callback
-        return AutoCloseable { wakers.remove(callback) }
-    }
-
-    /** Calls every waker. Called by a handle after a change, outside the monitor. */
-    fun wake() {
-        for (waker in wakers) waker()
-    }
 
     // -- the clock ----------------------------------------------------------
 
@@ -266,11 +311,28 @@ internal class Store {
      * now. A late subscriber receives nothing retroactive, ridl's own rule
      * for a late joiner on an event.
      */
-    fun raise(key: Key, bytes: ByteArray, seq: ULong) {
+    fun raise(key: Key, bytes: ByteArray, seq: ULong): List<Waker> {
         val envelope = Envelope(now, seq)
+        val wake = mutableListOf<Waker>()
         for (state in sources.values) {
-            if (key in state.subscribed) state.queue.addLast(QueuedEvent(key, bytes, envelope))
+            if (key in state.subscribed) {
+                state.queue.addLast(QueuedEvent(key, bytes, envelope))
+                state.waiter.take(key.iface)?.let(wake::add)
+            }
         }
+        return wake
+    }
+
+    /**
+     * Registers a source's `Interest.Event(iface)` waiter, and returns the
+     * wakers to wake: the one it displaced, and the new one at once when an
+     * occurrence of [iface] is already queued for this source.
+     */
+    fun wakeOnEvent(id: Int, iface: InterfaceNo, waker: Waker): List<Waker> {
+        val state = sources[id] ?: return emptyList()
+        val wake = listOfNotNull(state.waiter.register(iface, waker)).toMutableList()
+        if (state.queue.any { it.key.iface == iface }) state.waiter.take(iface)?.let(wake::add)
+        return wake
     }
 
     fun nextEvent(id: Int, out: ByteBuffer): RawOccurrence? {
@@ -283,11 +345,39 @@ internal class Store {
 
     // -- calls --------------------------------------------------------------
 
-    fun send(kind: CallKind, key: Key, args: ByteArray, seq: ULong): Correlation {
+    /**
+     * Records a sent call, and returns its correlation and the waker of every
+     * handler waiting under `Interest.Claim` for its interface. The handlers
+     * are woken whatever their served sets: one that does not serve the member
+     * finds nothing on its next `nextClaim` and registers again, a spurious
+     * wake the contract allows.
+     */
+    fun send(kind: CallKind, key: Key, args: ByteArray, seq: ULong): Pair<Correlation, List<Waker>> {
         val id = nextCallId++
         calls[id] = CallEntry(kind, key, args, Envelope(now, seq))
         pending.addLast(id)
-        return Correlation(id)
+        return Correlation(id) to claimWaiters.values.mapNotNull { it.take(key.iface) }
+    }
+
+    /**
+     * Registers a caller's `Interest.Outcome(c)` waiter, and returns the
+     * wakers to wake: the one it displaced, and the new one at once when the
+     * outcome is already known. A correlation the store no longer holds, never
+     * sent or forgotten, is not stored.
+     */
+    fun wakeOnOutcome(c: Correlation, waker: Waker): List<Waker> {
+        val entry = calls[c.value] ?: return emptyList()
+        if (entry.forgotten) return emptyList()
+        val wake = mutableListOf<Waker>()
+        if (entry.waker !== waker) {
+            entry.waker?.let(wake::add)
+            entry.waker = waker
+        }
+        if (entry.outcome != null) {
+            entry.waker?.let(wake::add)
+            entry.waker = null
+        }
+        return wake
     }
 
     fun ack(c: Correlation): Result<Unit>? {
@@ -314,10 +404,39 @@ internal class Store {
      */
     fun forget(c: Correlation) {
         val entry = calls[c.value] ?: return
-        if (entry.outcome != null) calls.remove(c.value) else entry.forgotten = true
+        if (entry.outcome != null) {
+            calls.remove(c.value)
+        } else {
+            // The waiter goes with the caller's interest: its settlement will
+            // not be readable, so there is nothing to wake it for.
+            entry.forgotten = true
+            entry.waker = null
+        }
     }
 
-    fun openHandler(): Int = nextHandlerId++
+    fun openHandler(): Int = nextHandlerId++.also { claimWaiters[it] = Waiter() }
+
+    fun closeHandler(handler: Int) {
+        claimWaiters.remove(handler)
+    }
+
+    /**
+     * Registers a handler's `Interest.Claim(iface)` waiter, and returns the
+     * wakers to wake: the one it displaced, and the new one at once when a
+     * call of [iface] that [served] admits is already waiting. [served] is the
+     * filter `nextClaim` applies, so a call this handler would not be
+     * presented does not wake it at once.
+     */
+    fun wakeOnClaim(handler: Int, iface: InterfaceNo, served: Collection<Key>?, waker: Waker): List<Waker> {
+        val waiter = claimWaiters[handler] ?: return emptyList()
+        val wake = listOfNotNull(waiter.register(iface, waker)).toMutableList()
+        val waiting = pending.any { id ->
+            val key = calls.getValue(id).key
+            key.iface == iface && (served == null || key in served)
+        }
+        if (waiting) waiter.take(iface)?.let(wake::add)
+        return wake
+    }
 
     /**
      * Presents the next waiting call this handler serves: every waiting call
@@ -340,7 +459,8 @@ internal class Store {
      * failure is consumed, and an injected failure leaves the claim
      * settleable.
      */
-    fun settle(handler: Int, claim: ClaimId, outcome: Result<ByteArray>) {
+    /** Returns the waker of the call's `Interest.Outcome` waiter, to wake once the monitor is left. */
+    fun settle(handler: Int, claim: ClaimId, outcome: Result<ByteArray>): Waker? {
         val owner = claims[claim.value]
         // A claim another handler holds is unknown to this one.
         if (owner == null || owner.handler != handler) throw SettleError.UnknownClaim
@@ -352,9 +472,10 @@ internal class Store {
         val entry = calls.getValue(owner.call)
         if (entry.forgotten) {
             calls.remove(owner.call)
-        } else {
-            entry.outcome = outcome
+            return null
         }
+        entry.outcome = outcome
+        return entry.waker.also { entry.waker = null }
     }
 
     fun failNextSettle() {

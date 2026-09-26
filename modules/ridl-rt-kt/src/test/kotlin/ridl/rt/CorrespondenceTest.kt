@@ -43,6 +43,7 @@ import ridl.rt.port.EventSink
 import ridl.rt.port.EventSource
 import ridl.rt.port.FixedReader
 import ridl.rt.port.Handler
+import ridl.rt.port.Interest
 import ridl.rt.port.RaiseError
 import ridl.rt.port.RawOccurrence
 import ridl.rt.port.RawSample
@@ -54,6 +55,7 @@ import ridl.rt.port.SettleError
 import ridl.rt.port.SignalReader
 import ridl.rt.port.SignalWriter
 import ridl.rt.port.SubscribeError
+import ridl.rt.port.Wakeable
 import ridl.rt.port.Watermark
 import ridl.rt.port.WriteError
 import ridl.rt.sample.Cause
@@ -74,7 +76,10 @@ import kotlin.reflect.full.isSubclassOf
  * package that spells the Rust module, has the Rust name, and has the Rust
  * variants, fields and methods under their Kotlin spellings.
  *
- * The rows are transcribed from `crates/ridl-rt/src` of the pinned release.
+ * The rows are transcribed from `crates/ridl-rt/src` of the pinned release,
+ * except `port::Wakeable`, `port::Interest` and `error::Transport::Busy`,
+ * which are transcribed from ridl `main` at c0fa57c (story E11.16) ahead of
+ * the release that carries them.
  * Two Rust items have no row: `payload::Ref` and `payload::Encoded`, the
  * borrow-checked proof that a value is decoded only from checked bytes, whose
  * guarantee [Payload] gives by taking the view `verify` returned.
@@ -140,7 +145,7 @@ class CorrespondenceTest {
         ),
         Row(
             "ridl_rt::error::Transport", Transport::class,
-            variants = listOf("Timeout", "Undelivered", "Down", "Corrupt"),
+            variants = listOf("Timeout", "Undelivered", "Down", "Corrupt", "Busy"),
             extends = listOf(CallError::class),
         ),
         Row("ridl_rt::error::CallError", CallError::class, variants = listOf("Contract", "Transport")),
@@ -230,6 +235,8 @@ class CorrespondenceTest {
             "ridl_rt::port::CoherentSignals", CoherentSignals::class,
             members = listOf("read_coherent"), extends = listOf(SignalReader::class),
         ),
+        Row("ridl_rt::port::Wakeable", Wakeable::class, members = listOf("wake_on")),
+        Row("ridl_rt::port::Interest", Interest::class, variants = listOf("Outcome", "Slot", "Event", "Claim")),
         Row("ridl_rt::port::ReadError", ReadError::class, variants = listOf("Short", "TooFewSamples", "Contract", "Detached")),
         Row("ridl_rt::port::WriteError", WriteError::class, variants = listOf("TooLarge", "NotOwner", "Contract", "Detached")),
         Row(
@@ -273,7 +280,7 @@ class CorrespondenceTest {
         val extras = setOf(
             RidlError::class,
             ridl.rt.payload.ConstraintViolation::class,
-            ridl.rt.port.Wakeable::class,
+            ridl.rt.task.Waker::class,
             ridl.rt.flatbuffers.Reader::class,
             ridl.rt.flatbuffers.TableView::class,
         )

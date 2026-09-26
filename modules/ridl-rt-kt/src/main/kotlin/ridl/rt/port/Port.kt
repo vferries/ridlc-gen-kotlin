@@ -24,6 +24,7 @@ import ridl.rt.sample.Envelope
 import ridl.rt.sample.Freshness
 import ridl.rt.sample.Provenance
 import ridl.rt.sample.Timestamp
+import ridl.rt.task.Waker
 import java.nio.ByteBuffer
 
 /** A port attached to one catalog. `ridl_rt::port::Attached`. */
@@ -250,17 +251,55 @@ public interface CoherentSignals : SignalReader {
 }
 
 /**
- * The extension a runtime that can wake a waiter presents (docs/design.md
- * §3). No port waits; a coroutine adapter builds on this one callback. A
- * runtime without it is still a complete runtime.
+ * Extension: a port that can wake a task. `ridl_rt::port::Wakeable`. A
+ * runtime that serves a generated client that waits implements it.
+ *
+ * [wakeOn] stores [waker][Waker] under [what][Interest] on the handle it is
+ * called on. The contract:
+ *
+ * - **One waker per key per handle.** A second `wakeOn` for a key the handle
+ *   already holds replaces the stored waker and wakes the displaced one, so no
+ *   task waits on a registration that can no longer fire. The same waker
+ *   registered again under the same key is the same task registering again:
+ *   it displaces nothing and wakes nothing, because a task registers on every
+ *   poll.
+ * - **Woken at most once.** A stored waker is woken after every change of its
+ *   key becomes visible, and is cleared when woken.
+ * - **Register, then read.** The caller registers on every poll, and
+ *   registers before it reads the port, so a change between the read and the
+ *   return still wakes it.
+ *
+ * A second task waiting for the same interface's events holds a second
+ * handle, and each handle's waiter is woken. A runtime with one "something
+ * changed" source may wake every waiter it holds on any change: a spurious
+ * wake costs one poll and a missed wake hangs a task. A runtime with no wake
+ * source of its own does not implement this interface.
  */
 public interface Wakeable {
-    /**
-     * Calls [callback] whenever an outcome, an occurrence or a claim may have
-     * arrived, until the returned handle is closed. The callback must not
-     * block.
-     */
-    public fun onChange(callback: () -> Unit): AutoCloseable
+    /** Registers [waker] to be woken when [what] changes. */
+    public fun wakeOn(what: Interest, waker: Waker)
+}
+
+/**
+ * What a task waits for, as [Wakeable.wakeOn] keys it.
+ * `ridl_rt::port::Interest`.
+ *
+ * [Event] and [Claim] are keyed per interface, not per member:
+ * [EventSource.next] and [Handler.nextClaim] drain one queue whatever the
+ * ordinal, and the subscription and the served set already filter by member.
+ */
+public sealed interface Interest {
+    /** The outcome of one call is known. */
+    public data class Outcome(public val correlation: Correlation) : Interest
+
+    /** A slot for a new call is free. */
+    public data object Slot : Interest
+
+    /** An occurrence of one of the interface's events is waiting. */
+    public data class Event(public val iface: InterfaceNo) : Interest
+
+    /** A claim on one of the interface's members is waiting. */
+    public data class Claim(public val iface: InterfaceNo) : Interest
 }
 
 /** A read that failed. `ridl_rt::port::ReadError`. */

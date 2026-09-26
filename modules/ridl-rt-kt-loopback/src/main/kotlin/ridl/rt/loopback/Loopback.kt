@@ -16,6 +16,7 @@ import ridl.rt.port.EventSink
 import ridl.rt.port.EventSource
 import ridl.rt.port.FixedReader
 import ridl.rt.port.Handler
+import ridl.rt.port.Interest
 import ridl.rt.port.RawOccurrence
 import ridl.rt.port.RawSample
 import ridl.rt.port.ScannableSignals
@@ -24,6 +25,7 @@ import ridl.rt.port.Wakeable
 import ridl.rt.port.Watermark
 import ridl.rt.sample.Duration
 import ridl.rt.sample.Timestamp
+import ridl.rt.task.Waker
 import java.nio.ByteBuffer
 
 /** The six role handles of one runtime, as [Loopback.split] hands them out. */
@@ -32,19 +34,19 @@ public class Handles internal constructor(
     public val reader: ReaderHandle,
     /** `SignalWriter`. */
     public val writer: WriterHandle,
-    /** `EventSource`. */
+    /** `EventSource` and `Wakeable`. */
     public val source: SourceHandle,
     /** `EventSink`. */
     public val sink: SinkHandle,
-    /** `Caller`. */
+    /** `Caller`, `Clock` and `Wakeable`. */
     public val caller: CallerHandle,
-    /** `Handler`. */
+    /** `Handler` and `Wakeable`. */
     public val handler: HandlerHandle,
 )
 
 /**
  * The in-process reference runtime: every port of `ridl-rt-kt` over one
- * in-memory store, and the aggregate handle that implements all eleven port
+ * in-memory store, and the aggregate handle that implements all twelve port
  * interfaces by delegating to the six role handles it holds. It is what a
  * generated `Client`, `Publisher` or `dispatch` is built over in a test.
  *
@@ -53,14 +55,15 @@ public class Handles internal constructor(
  * never reports `NotOwner`, never a `Contract` error except from an
  * unprovisioned [readFixed], and every value's freshness is `Unbounded`.
  * Nothing detaches and nothing is bounded, so `Detached`, `Busy` and
- * `TooLarge` never appear outside [failNextSettle].
+ * `TooLarge` never appear outside [failNextSettle]; a `Transport.Busy` reaches
+ * a caller only when a provider settles a call with it.
  *
  * The catalog is carried and never compared: checking it against an
  * interface's own is a generated face's job (ADR-0021 decision 3).
  *
- * It also presents [Wakeable], Kotlin's own extension (docs/design.md §3): a
- * callback registered with [onChange] runs after every commit, raise, send
- * and settlement on any handle of this runtime.
+ * It also presents [Wakeable], and routes each key to the role handle that
+ * carries it: `Outcome` and `Slot` to the caller, `Event` to the source,
+ * `Claim` to the handler.
  */
 public class Loopback(
     override val catalog: CatalogRef,
@@ -138,9 +141,13 @@ public class Loopback(
         store.locked { failNextSettle() }
     }
 
-    override fun onChange(callback: () -> Unit): AutoCloseable = store.addWaker(callback)
+    // The twelve port implementations, each one a delegation.
 
-    // The eleven port implementations, each one a delegation.
+    override fun wakeOn(what: Interest, waker: Waker): Unit = when (what) {
+        is Interest.Outcome, Interest.Slot -> handles.caller.wakeOn(what, waker)
+        is Interest.Event -> handles.source.wakeOn(what, waker)
+        is Interest.Claim -> handles.handler.wakeOn(what, waker)
+    }
 
     override fun now(): Timestamp = handles.reader.now()
 
