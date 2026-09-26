@@ -2,6 +2,8 @@
 // spelling of `ridl_rt::contract` (docs/design.md §3).
 package ridl.rt.contract
 
+import ridl.rt.RidlError
+import ridl.rt.encoding.Encoding
 import ridl.rt.sample.Duration
 
 /**
@@ -177,7 +179,74 @@ public data class Member(
      * one for every other kind.
      */
     public val payloads: List<PayloadInfo>,
-)
+) {
+    /**
+     * The member's `timing.max`: on a `command` or a `query` the response
+     * bound, and so the call's deadline (ridl §9.3; frame specification §8).
+     * `null` when the member has no timing or its timing has no `max`.
+     * `ridl_rt::contract::Member::call_deadline`.
+     *
+     * The `max` is returned whatever the kind; on a `signal` it is the
+     * staleness bound and on an `event` the time to live (ridl §9), neither
+     * of which is a call deadline, so call it on a `command` or a `query`.
+     */
+    public fun callDeadline(): Duration? = timing?.max
+
+    /**
+     * The bytes one in-flight instance of this member reserves in [encoding]:
+     * the sum of [PayloadInfo.maxSize] for [encoding] over its [payloads] —
+     * one payload for most kinds, two for a `query`, the request and then the
+     * reply. `ridl_rt::contract::Member::reservation`.
+     *
+     * No specification defines this budget. It is derived from the
+     * descriptors alone, so that every runtime sizing a table of calls in
+     * flight computes the same number.
+     *
+     * @throws Unsized naming this member and the first payload whose size for
+     *   [encoding] is `null`: a missing size is reported, never estimated.
+     */
+    public fun reservation(encoding: Encoding): ULong {
+        var total = 0uL
+        for (payload in payloads) {
+            val size = encoding.maxSize(payload.maxSize) ?: throw Unsized(ordinal, name, payload.typeName)
+            total = saturatingAdd(total, size.toULong())
+        }
+        return total
+    }
+}
+
+/**
+ * The in-flight byte budget of a table of members in [encoding]: the sum of
+ * [Member.reservation] over [members]. Pass an interface's
+ * [Interface.members]; a table serving several interfaces adds the budget of
+ * each. `ridl_rt::contract::table_budget`.
+ *
+ * No specification defines this budget. It is derived from the descriptors
+ * alone, and it counts every member it is given, whatever its kind.
+ *
+ * @throws Unsized for the first member, in the order given, whose reservation
+ *   has a payload with no size for [encoding].
+ */
+public fun tableBudget(members: List<Member>, encoding: Encoding): ULong =
+    members.fold(0uL) { total, member -> saturatingAdd(total, member.reservation(encoding)) }
+
+/** `a + b`, clamped at the largest `ULong`, as Rust's `u64::saturating_add`. */
+private fun saturatingAdd(a: ULong, b: ULong): ULong = if (ULong.MAX_VALUE - a < b) ULong.MAX_VALUE else a + b
+
+/**
+ * A payload with no size in the encoding a budget was asked for: its
+ * [EncodedSizes] field for that encoding is `null`. The budget is not
+ * computed, because a missing size is not estimated.
+ * `ridl_rt::contract::Unsized`.
+ */
+public class Unsized(
+    /** The member's ordinal. */
+    public val ordinal: Ordinal,
+    /** The member's name. */
+    public val member: String,
+    /** The name of the payload type that has no size. */
+    public val typeName: String,
+) : RidlError("member `$member` (ordinal ${ordinal.value}): payload `$typeName` has no size in this encoding")
 
 /** The form of a timing annotation (ridl §9). `ridl_rt::contract::TimingMode`. */
 public enum class TimingMode {

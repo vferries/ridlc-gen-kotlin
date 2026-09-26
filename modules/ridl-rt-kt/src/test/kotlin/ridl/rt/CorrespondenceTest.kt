@@ -77,9 +77,11 @@ import kotlin.reflect.full.isSubclassOf
  * variants, fields and methods under their Kotlin spellings.
  *
  * The rows are transcribed from `crates/ridl-rt/src` of the pinned release,
- * except `port::Wakeable`, `port::Interest` and `error::Transport::Busy`,
- * which are transcribed from ridl `main` at c2543c2 (story E11.16) ahead of
- * the release that carries them.
+ * except the items ridl `main` added ahead of the release that carries them:
+ * `port::Wakeable`, `port::Interest` and `error::Transport::Busy` at c2543c2
+ * (story E11.16), and `sample::Continuity`, `sample::TrackerFull`,
+ * `sample::EventSeqTracker`, `contract::Unsized`, `Member::call_deadline`,
+ * `Member::reservation` and `Encoding::max_size` at 87de8c6 (story E11.19).
  * Two Rust items have no row: `payload::Ref` and `payload::Encoded`, the
  * borrow-checked proof that a value is decoded only from checked bytes, whose
  * guarantee [Payload] gives by taking the view `verify` returned.
@@ -123,8 +125,9 @@ class CorrespondenceTest {
         ),
         Row(
             "ridl_rt::contract::Member", Member::class,
-            members = listOf("ordinal", "kind", "name", "timing", "payloads"),
+            members = listOf("ordinal", "kind", "name", "timing", "payloads", "call_deadline", "reservation"),
         ),
+        Row("ridl_rt::contract::Unsized", ridl.rt.contract.Unsized::class, members = listOf("ordinal", "member", "type_name")),
         Row("ridl_rt::contract::TimingMode", TimingMode::class, variants = listOf("StrictPeriodic", "Range")),
         Row("ridl_rt::contract::Timing", Timing::class, members = listOf("mode", "min", "max")),
         Row("ridl_rt::contract::PayloadInfo", PayloadInfo::class, members = listOf("type_name", "max_size")),
@@ -135,7 +138,7 @@ class CorrespondenceTest {
         // encoding: the trait and its three marker types are one closed enum.
         Row(
             "ridl_rt::encoding::Encoding", Encoding::class,
-            variants = listOf("FlatBuffers", "Proto3", "ReprC"),
+            variants = listOf("FlatBuffers", "Proto3", "ReprC"), members = listOf("max_size"),
         ),
         // error
         Row(
@@ -162,6 +165,9 @@ class CorrespondenceTest {
             members = listOf("value", "provenance", "freshness", "envelope", "usable"),
         ),
         Row("ridl_rt::sample::Occurrence", Occurrence::class, members = listOf("payload", "envelope")),
+        Row("ridl_rt::sample::Continuity", ridl.rt.sample.Continuity::class, variants = listOf("First", "Next", "Lost", "NotNewer")),
+        Row("ridl_rt::sample::TrackerFull", ridl.rt.sample.TrackerFull::class),
+        Row("ridl_rt::sample::EventSeqTracker", ridl.rt.sample.EventSeqTracker::class, members = listOf("observe", "forget")),
         // payload
         Row("ridl_rt::payload::Payload", Payload::class, members = listOf("max_size", "encode", "verify", "decode")),
         Row("ridl_rt::payload::EncodeError", EncodeError::class, variants = listOf("Capacity")),
