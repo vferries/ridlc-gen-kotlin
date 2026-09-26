@@ -23,6 +23,7 @@ import ridl.rt.port.EventSink
 import ridl.rt.port.EventSource
 import ridl.rt.port.Handler
 import ridl.rt.port.ReadError
+import ridl.rt.port.SendError
 import ridl.rt.port.SettleError
 import ridl.rt.port.SignalReader
 import ridl.rt.port.SignalWriter
@@ -43,7 +44,7 @@ public class CallsContract<R>(factory: Factory<R>) : Contract<R>(factory)
         ::`a claim is presented once and settled once`,
         ::`a short buffer leaves the claim for the next call`,
         ::`forget releases a settled correlation`,
-        ::`forget before the claim is presented leaves the call for the provider`,
+        ::`forget before the claim is presented withdraws or leaves the call`,
         ::`forget between the claim and the settlement leaves the settlement valid`,
         ::`a claim that was never presented cannot be settled`,
         ::`an injected settle failure is not spent on an unknown claim`,
@@ -210,21 +211,49 @@ public class CallsContract<R>(factory: Factory<R>) : Contract<R>(factory)
     }
 
     /**
-     * `Caller.forget` releases the caller's interest in an outcome. It is not
-     * a cancellation: `Handler`'s contract is that every claim is settled, and
-     * a call already sent is the provider's.
+     * `Caller.forget` releases the caller's interest in an outcome. What
+     * happens to a call no provider has claimed yet is the runtime's: one may
+     * withdraw it, and one whose transport has already sent the request cannot
+     * recall it, so the call is still presented and settled. The test accepts
+     * either result. Either way the caller is not told the outcome, and a
+     * withdrawn call holds no room: the runtime accepts as many further sends
+     * before `SendError.Busy` as a new runtime does.
      */
-    public fun `forget before the claim is presented leaves the call for the provider`() {
+    public fun `forget before the claim is presented withdraws or leaves the call`() {
         val rt = runtime()
         rt.serve(IFACE, listOf(ORD))
         val correlation = rt.command(IFACE, ORD, bytes(1))
         rt.forget(correlation)
 
         val buf = out(8)
-        val claim = rt.claim(buf)
-        assertArrayEquals(array(1), buf.written(), "the call is still presented")
-        rt.settle(claim.id, ok())
-        assertNull(rt.ack(correlation), "but the caller asked not to be told")
+        val claim = rt.nextClaim(buf)
+        if (claim != null) {
+            assertArrayEquals(array(1), buf.written())
+            rt.settle(claim.id, ok())
+        } else {
+            val fresh = runtime()
+            fresh.serve(IFACE, listOf(ORD))
+            assertEquals(sendsUntilBusy(fresh), sendsUntilBusy(rt), "the withdrawn call gave its room back")
+        }
+        assertNull(rt.ack(correlation), "the caller asked not to be told")
+    }
+
+    /**
+     * The number of commands [caller] accepts before it throws
+     * `SendError.Busy`, counting at most 1024. A runtime that accepts that
+     * many is not checked further: the count is the same for it with or
+     * without the room a withdrawn call would hold.
+     */
+    private fun sendsUntilBusy(caller: Caller): Int {
+        val sendsChecked = 1024
+        for (sent in 0 until sendsChecked) {
+            try {
+                caller.command(IFACE, ORD, bytes(2))
+            } catch (_: SendError.Busy) {
+                return sent
+            }
+        }
+        return sendsChecked
     }
 
     /** A `forget` between the claim and the settlement does not revoke the provider's settlement, and the caller is not told of it. */

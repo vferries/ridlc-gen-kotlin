@@ -36,7 +36,10 @@ turn the Rust suite: M1, `settle` without its owner check, fails
 cannot settle another handlers claim`, and M5, a `touch` that
 overwrites a staged value, fails the two touch tests. `SuiteTest` is the Rust
 crate's own test that every test function is run: a public test method its
-contract's `tests` list does not name turns it red. The `Wakeable` and
+contract's `tests` list does not name turns it red. The case of a forget before
+any claim follows ridl `main` at 5ac7082: it accepts either a call still
+presented and settled or a withdrawn one, and for a withdrawal checks that the
+runtime accepts as many further sends as a new runtime does. The `Wakeable` and
 correlation-table cases of the second half of E11.20 follow when that half
 lands.
 
