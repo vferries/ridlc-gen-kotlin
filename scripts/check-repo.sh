@@ -10,6 +10,7 @@ required_readmes=(
   "modules/ridl-rt-kt/README.md"
   "modules/ridl-rt-kt-loopback/README.md"
   "modules/ridl-rt-kt-coroutines/README.md"
+  "modules/ridl-rt-kt-conformance/README.md"
   "modules/conformance/README.md"
   "samples/cabin/README.md"
   "shared/README.md"

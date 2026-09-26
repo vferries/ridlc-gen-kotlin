@@ -3,13 +3,11 @@
 ## Responsibility
 
 This module is the `suspend` adapter over the polling face (docs/design.md §5,
-D-K6): one function,
-`await(port: Wakeable, interest: Interest, poll: () -> T?):
-T`, which suspends
-until a polling read of a face answers, woken by the runtime's `Wakeable`
-extension of [`ridl-rt-kt`](../ridl-rt-kt/README.md) under the key the read's
-answer changes under. It is a JVM library over `kotlinx-coroutines-core`. The
-repository is licensed under the root [MIT License](../../LICENSE).
+D-K6): one function, `await(port, interest, poll)`, which suspends until a
+polling read of a face answers, woken by the runtime's `Wakeable` extension of
+[`ridl-rt-kt`](../ridl-rt-kt/README.md) under the key the read's answer changes
+under. It is a JVM library over `kotlinx-coroutines-core`. The repository is
+licensed under the root [MIT License](../../LICENSE).
 
 ```kotlin
 val correlation = client.average(Window.of(10))

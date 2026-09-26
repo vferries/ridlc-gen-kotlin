@@ -21,6 +21,7 @@ for (module in listOf(
     "ridl-rt-kt",
     "ridl-rt-kt-loopback",
     "ridl-rt-kt-coroutines",
+    "ridl-rt-kt-conformance",
     "conformance",
 )) {
     include(":$module")

@@ -18,8 +18,12 @@ supplies a `fixed`, and `failNextSettle` injects the one fault the runtime has.
 
 ## Status
 
-Stage K1c. `PortsTest` is `crates/ridl-loopback/tests/ports.rs` of the pinned
-release, test for test and name for name, plus the JVM-specific tests below.
+Stage K1c. The port contract tests any runtime can run are the suite of
+[`ridl-rt-kt-conformance`](../ridl-rt-kt-conformance/README.md), which
+`ConformanceTest` runs over this runtime, all 41 (driftsys/ridlc-gen-kotlin#8).
+`PortsTest` is what stays in `crates/ridl-loopback/tests/ports.rs` on ridl
+`main`, the tests only this runtime can express, each for the reason that file
+gives, plus the JVM-specific tests below.
 
 driftsys/ridlc-gen-kotlin#5 adds the `Wakeable` of ridl `main` (story E11.16, as
 c2543c2 left it). Every handle is `Wakeable`, and stores one waker per kind of

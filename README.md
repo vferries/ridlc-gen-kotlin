@@ -12,6 +12,8 @@ Kotlin value objects, codecs and faces over `ridl-rt-kt`.
   in-process runtime the tests run over.
 - [`ridl-rt-kt-coroutines`](modules/ridl-rt-kt-coroutines/README.md) — the
   coroutine adapter over the runtime contract.
+- [`ridl-rt-kt-conformance`](modules/ridl-rt-kt-conformance/README.md) — the
+  port contract suite any Kotlin runtime runs from its own tests.
 - [`conformance`](modules/conformance/README.md) — the pinned `ridl` release,
   the corpus, and the tests that run the plugin from outside.
 - [`samples/cabin`](samples/cabin/README.md) — the JVM demonstration.
