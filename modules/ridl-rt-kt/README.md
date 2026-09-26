@@ -27,10 +27,10 @@ It is the spelling of `ridl_rt::flatbuffers`, whose free reading functions are
 driftsys/ridlc-gen-kotlin#5 adds three items of ridl `main` ahead of the release
 that carries them, and `CorrespondenceTest` rows them from `main`: the keyed
 `port::Wakeable` and `port::Interest` and `error::Transport::Busy` (story
-E11.16, c0fa57c), and `ridl.rt.task`, the spelling of `ridl_rt::task` `block_on`
-and `noop_waker` (story E11.17, 3f2cfb3), with `Waker` standing for
-`core::task::Waker`. `TaskTest` is `crates/ridl-rt/tests/task.rs`, case for
-case.
+E11.16, c0fa57c and c2543c2), and `ridl.rt.task`, the spelling of
+`ridl_rt::task` `block_on` and `noop_waker` (story E11.17, 3f2cfb3), with
+`Waker` standing for `core::task::Waker`. `TaskTest` is
+`crates/ridl-rt/tests/task.rs`, case for case.
 
 ## Where the code departs from docs/design.md
 

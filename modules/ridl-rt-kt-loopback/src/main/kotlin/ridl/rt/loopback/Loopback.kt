@@ -30,13 +30,13 @@ import java.nio.ByteBuffer
 
 /** The six role handles of one runtime, as [Loopback.split] hands them out. */
 public class Handles internal constructor(
-    /** `Attached`, `Clock`, `SignalReader`, `FixedReader`, `ScannableSignals` and `CoherentSignals`. */
+    /** `Attached`, `Clock`, `SignalReader`, `FixedReader`, `ScannableSignals`, `CoherentSignals` and `Wakeable`. */
     public val reader: ReaderHandle,
-    /** `SignalWriter`. */
+    /** `SignalWriter` and `Wakeable`. */
     public val writer: WriterHandle,
     /** `EventSource` and `Wakeable`. */
     public val source: SourceHandle,
-    /** `EventSink`. */
+    /** `EventSink` and `Wakeable`. */
     public val sink: SinkHandle,
     /** `Caller`, `Clock` and `Wakeable`. */
     public val caller: CallerHandle,
@@ -62,7 +62,7 @@ public class Handles internal constructor(
  * interface's own is a generated face's job (ADR-0021 decision 3).
  *
  * It also presents [Wakeable], and routes each key to the role handle that
- * carries it: `Outcome` and `Slot` to the caller, `Event` to the source,
+ * observes it: `Outcome` and `Slot` to the caller, `Event` to the source,
  * `Claim` to the handler.
  */
 public class Loopback(

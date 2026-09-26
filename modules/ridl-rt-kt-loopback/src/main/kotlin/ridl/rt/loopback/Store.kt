@@ -57,42 +57,6 @@ internal sealed interface Staged {
 internal enum class CallKind { Command, Query }
 
 /**
- * A one-waiter slot: the waker of one task, with the key it waits under.
- * `register` and `take_if_key` of the Rust store.
- */
-internal class Waiter<K> {
-    private var key: K? = null
-    private var waker: Waker? = null
-
-    /**
-     * Stores [waker] under [key], and returns the waker it displaced. The same
-     * waker under the same key is the same task registering again, which it
-     * does on every poll: it is kept and nothing is displaced. Under another
-     * key the stored registration is displaced and woken even when the task
-     * is the same, because the slot holds one key and the first would
-     * otherwise never wake it.
-     */
-    fun register(key: K, waker: Waker): Waker? {
-        if (this.key == key && this.waker === waker) return null
-        val displaced = this.waker
-        this.key = key
-        this.waker = waker
-        return displaced
-    }
-
-    /** Takes the waker when it waits under [key], which clears the slot. */
-    fun take(key: K): Waker? {
-        if (waker == null || this.key != key) return null
-        return waker.also { clear() }
-    }
-
-    fun clear() {
-        key = null
-        waker = null
-    }
-}
-
-/**
  * Everything two handles must agree on.
  *
  * The maps are sorted, as the Rust `BTreeMap`s are, so a commit applies its
@@ -119,8 +83,31 @@ internal class Store {
         val subscribed = TreeSet<Key>()
         val queue = ArrayDeque<QueuedEvent>()
 
-        /** The source's one `Interest.Event` waiter, with the interface it waits on. */
-        val waiter = Waiter<InterfaceNo>()
+        /**
+         * The one `Interest.Event` waker this handle holds, whatever interface
+         * it was registered under: any occurrence queued here wakes it.
+         */
+        var waiter: Waker? = null
+    }
+
+    /** One handler handle's served set and its one `Interest.Claim` waker. */
+    private class HandlerState {
+        /** The members `serve` was called with, in the order served, with no duplicate. */
+        val served = LinkedHashSet<Key>()
+
+        /**
+         * The one `Interest.Claim` waker this handle holds, whatever interface
+         * it was registered under: any call it serves wakes it.
+         */
+        var waiter: Waker? = null
+
+        /**
+         * Whether `nextClaim` presents a call on [key]: every call when
+         * nothing is served, the Rust loopback's deliberate deviation from
+         * `Handler.serve`, kept because the generated `dispatch` never calls
+         * `serve`.
+         */
+        fun serves(key: Key): Boolean = served.isEmpty() || key in served
     }
 
     /** A presented claim: the call it presented, and the handler holding it. */
@@ -144,10 +131,12 @@ internal class Store {
         var forgotten: Boolean = false
 
         /**
-         * The call's one `Interest.Outcome` waiter. It is kept with the call
-         * rather than on the caller handle, because the correlation is the key.
+         * The call's `Interest.Outcome` waker, taken and woken when the
+         * outcome is recorded or the call is forgotten. It is kept with the
+         * call rather than on the caller handle, because the correlation is
+         * the key.
          */
-        var waker: Waker? = null
+        var waiter: Waker? = null
     }
 
     private var now = Timestamp(0)
@@ -157,7 +146,9 @@ internal class Store {
     private val sources = TreeMap<Int, SourceState>()
     private var nextSourceId = 0
     private val calls = TreeMap<Long, CallEntry>()
-    private val pending = ArrayDeque<Long>()
+
+    /** The calls waiting to be presented, by call identity, which is send order. */
+    private val pending = TreeSet<Long>()
     private var nextCallId = 0L
 
     /**
@@ -168,16 +159,19 @@ internal class Store {
     private val claims = TreeMap<Long, ClaimOwner>()
     private var nextClaimId = 0L
     private var nextHandlerId = 0
+    private val handlers = TreeMap<Int, HandlerState>()
     private var failNextSettle = false
-
-    /**
-     * Each open handler's one `Interest.Claim` waiter, with the interface it
-     * waits on, from [openHandler] to [closeHandler].
-     */
-    private val claimWaiters = TreeMap<Int, Waiter<InterfaceNo>>()
 
     /** Runs [block] under the store's monitor. */
     inline fun <T> locked(block: Store.() -> T): T = synchronized(this) { block() }
+
+    /**
+     * Runs [block] under the store's monitor with a list for the wakers it
+     * must wake, and returns the list, for the handle to wake once the monitor
+     * is left.
+     */
+    inline fun wakeList(block: Store.(MutableList<Waker>) -> Unit): List<Waker> =
+        mutableListOf<Waker>().also { locked { block(it) } }
 
     // -- the clock ----------------------------------------------------------
 
@@ -309,7 +303,9 @@ internal class Store {
     /**
      * Copies the occurrence into the queue of every source subscribed to it
      * now. A late subscriber receives nothing retroactive, ridl's own rule
-     * for a late joiner on an event.
+     * for a late joiner on an event. Each source it queues the occurrence for
+     * has its `Event` waker returned, whatever interface that waker was
+     * registered under.
      */
     fun raise(key: Key, bytes: ByteArray, seq: ULong): List<Waker> {
         val envelope = Envelope(now, seq)
@@ -317,22 +313,22 @@ internal class Store {
         for (state in sources.values) {
             if (key in state.subscribed) {
                 state.queue.addLast(QueuedEvent(key, bytes, envelope))
-                state.waiter.take(key.iface)?.let(wake::add)
+                state.waiter?.let(wake::add)
+                state.waiter = null
             }
         }
         return wake
     }
 
     /**
-     * Registers a source's `Interest.Event(iface)` waiter, and returns the
-     * wakers to wake: the one it displaced, and the new one at once when an
-     * occurrence of [iface] is already queued for this source.
+     * Stores a source's `Interest.Event` waker, or wakes it at once when an
+     * occurrence is already in the source's queue or the source is closed.
+     * The interface of the key is not kept: the handle holds one `Event`
+     * waker, and any occurrence queued for it wakes that waker.
      */
-    fun wakeOnEvent(id: Int, iface: InterfaceNo, waker: Waker): List<Waker> {
-        val state = sources[id] ?: return emptyList()
-        val wake = listOfNotNull(state.waiter.register(iface, waker)).toMutableList()
-        if (state.queue.any { it.key.iface == iface }) state.waiter.take(iface)?.let(wake::add)
-        return wake
+    fun waitEvent(id: Int, waker: Waker, wake: MutableList<Waker>) {
+        val state = sources[id] ?: return run { wake += waker }
+        state.waiter = replace(state.waiter, waker, state.queue.isNotEmpty(), wake)
     }
 
     fun nextEvent(id: Int, out: ByteBuffer): RawOccurrence? {
@@ -346,38 +342,32 @@ internal class Store {
     // -- calls --------------------------------------------------------------
 
     /**
-     * Records a sent call, and returns its correlation and the waker of every
-     * handler waiting under `Interest.Claim` for its interface. The handlers
-     * are woken whatever their served sets: one that does not serve the member
-     * finds nothing on its next `nextClaim` and registers again, a spurious
-     * wake the contract allows.
+     * Queues a call for presentation, and returns its correlation and the
+     * `Claim` waker of every handler that serves the member, whatever
+     * interface that waker was registered under.
      */
     fun send(kind: CallKind, key: Key, args: ByteArray, seq: ULong): Pair<Correlation, List<Waker>> {
         val id = nextCallId++
         calls[id] = CallEntry(kind, key, args, Envelope(now, seq))
-        pending.addLast(id)
-        return Correlation(id) to claimWaiters.values.mapNotNull { it.take(key.iface) }
+        pending += id
+        val wake = mutableListOf<Waker>()
+        wakeHandlersServing(key, wake)
+        return Correlation(id) to wake
     }
 
     /**
-     * Registers a caller's `Interest.Outcome(c)` waiter, and returns the
-     * wakers to wake: the one it displaced, and the new one at once when the
-     * outcome is already known. A correlation the store no longer holds, never
-     * sent or forgotten, is not stored.
+     * Stores a call's `Interest.Outcome` waker, or wakes it at once when the
+     * outcome is already recorded or when no call in flight has that
+     * correlation, an unknown or a forgotten one, because no outcome will
+     * ever be recorded for it.
      */
-    fun wakeOnOutcome(c: Correlation, waker: Waker): List<Waker> {
-        val entry = calls[c.value] ?: return emptyList()
-        if (entry.forgotten) return emptyList()
-        val wake = mutableListOf<Waker>()
-        if (entry.waker !== waker) {
-            entry.waker?.let(wake::add)
-            entry.waker = waker
+    fun waitOutcome(c: Correlation, waker: Waker, wake: MutableList<Waker>) {
+        val entry = calls[c.value]
+        if (entry == null || entry.forgotten) {
+            wake += waker
+            return
         }
-        if (entry.outcome != null) {
-            entry.waker?.let(wake::add)
-            entry.waker = null
-        }
-        return wake
+        entry.waiter = replace(entry.waiter, waker, entry.outcome != null, wake)
     }
 
     fun ack(c: Correlation): Result<Unit>? {
@@ -400,50 +390,88 @@ internal class Store {
     /**
      * Releases the caller's interest. A settled call's entry goes; a call in
      * flight is marked forgotten and goes when its settlement lands. Either
-     * way `ack` and `reply` answer `null` afterwards.
+     * way `ack` and `reply` answer `null` afterwards. A waiter on the outcome
+     * of a call in flight is woken: no outcome will be recorded for it, so it
+     * would otherwise never be.
      */
-    fun forget(c: Correlation) {
+    fun forget(c: Correlation, wake: MutableList<Waker>) {
         val entry = calls[c.value] ?: return
         if (entry.outcome != null) {
             calls.remove(c.value)
         } else {
-            // The waiter goes with the caller's interest: its settlement will
-            // not be readable, so there is nothing to wake it for.
             entry.forgotten = true
-            entry.waker = null
+            entry.waiter?.let(wake::add)
+            entry.waiter = null
         }
     }
 
-    fun openHandler(): Int = nextHandlerId++.also { claimWaiters[it] = Waiter() }
+    fun openHandler(): Int = nextHandlerId++.also { handlers[it] = HandlerState() }
 
-    fun closeHandler(handler: Int) {
-        claimWaiters.remove(handler)
+    /**
+     * Removes a closed handler. Every claim it held and had not settled
+     * returns to the waiting calls, in its place by send order, so another
+     * handler that serves the member can take it, and every handler that
+     * serves the member has its `Claim` waker returned. The handler's own
+     * state goes first, so the return never wakes its own waker. The loopback
+     * enforces no deadline on the returned call.
+     */
+    fun closeHandler(id: Int, wake: MutableList<Waker>) {
+        handlers.remove(id)
+        val held = claims.filterValues { it.handler == id }.keys.toList()
+        for (claim in held) {
+            val owner = claims.remove(claim)!!
+            pending += owner.call
+            wakeHandlersServing(calls.getValue(owner.call).key, wake)
+        }
+    }
+
+    /** Takes the `Claim` waker of every handler that serves [key]. */
+    private fun wakeHandlersServing(key: Key, wake: MutableList<Waker>) {
+        for (state in handlers.values) {
+            if (state.serves(key)) {
+                state.waiter?.let(wake::add)
+                state.waiter = null
+            }
+        }
+    }
+
+    /** The members a handler served, in the order served. */
+    fun served(handler: Int): List<Key> = handlers[handler]?.served?.toList().orEmpty()
+
+    /**
+     * Adds members to a handler's served set. A call already waiting that the
+     * handler now serves wakes its `Claim` waker.
+     */
+    fun serve(handler: Int, iface: InterfaceNo, ords: List<Ordinal>, wake: MutableList<Waker>) {
+        val state = handlers[handler] ?: return
+        ords.mapTo(state.served) { Key(iface, it) }
+        if (state.waiter != null && claimWaiting(state)) {
+            wake += state.waiter!!
+            state.waiter = null
+        }
     }
 
     /**
-     * Registers a handler's `Interest.Claim(iface)` waiter, and returns the
-     * wakers to wake: the one it displaced, and the new one at once when a
-     * call of [iface] that [served] admits is already waiting. [served] is the
-     * filter `nextClaim` applies, so a call this handler would not be
-     * presented does not wake it at once.
+     * Stores a handler's `Interest.Claim` waker, or wakes it at once when a
+     * call it serves is already waiting or the handler is closed. The
+     * interface of the key is not kept: the handle holds one `Claim` waker,
+     * and any call it serves wakes that waker.
      */
-    fun wakeOnClaim(handler: Int, iface: InterfaceNo, served: Collection<Key>?, waker: Waker): List<Waker> {
-        val waiter = claimWaiters[handler] ?: return emptyList()
-        val wake = listOfNotNull(waiter.register(iface, waker)).toMutableList()
-        val waiting = pending.any { id ->
-            val key = calls.getValue(id).key
-            key.iface == iface && (served == null || key in served)
-        }
-        if (waiting) waiter.take(iface)?.let(wake::add)
-        return wake
+    fun waitClaim(handler: Int, waker: Waker, wake: MutableList<Waker>) {
+        val state = handlers[handler] ?: return run { wake += waker }
+        state.waiter = replace(state.waiter, waker, claimWaiting(state), wake)
     }
+
+    /** Whether a call is waiting that `nextClaim` would present to this handler: the same scan it makes. */
+    private fun claimWaiting(state: HandlerState): Boolean = pending.any { state.serves(calls.getValue(it).key) }
 
     /**
      * Presents the next waiting call this handler serves: every waiting call
-     * when [served] is `null`, else only those it names.
+     * when it has served nothing.
      */
-    fun nextClaim(handler: Int, served: Collection<Key>?, out: ByteBuffer): Claim? {
-        val id = pending.firstOrNull { served == null || calls.getValue(it).key in served } ?: return null
+    fun nextClaim(handler: Int, out: ByteBuffer): Claim? {
+        val state = handlers[handler] ?: return null
+        val id = pending.firstOrNull { state.serves(calls.getValue(it).key) } ?: return null
         val entry = calls.getValue(id)
         copyInto(entry.args, out)
         val claimId = nextClaimId++
@@ -459,7 +487,7 @@ internal class Store {
      * failure is consumed, and an injected failure leaves the claim
      * settleable.
      */
-    /** Returns the waker of the call's `Interest.Outcome` waiter, to wake once the monitor is left. */
+    /** A recorded outcome returns the call's `Outcome` waker, to wake once the monitor is left. */
     fun settle(handler: Int, claim: ClaimId, outcome: Result<ByteArray>): Waker? {
         val owner = claims[claim.value]
         // A claim another handler holds is unknown to this one.
@@ -475,7 +503,7 @@ internal class Store {
             return null
         }
         entry.outcome = outcome
-        return entry.waker.also { entry.waker = null }
+        return entry.waiter.also { entry.waiter = null }
     }
 
     fun failNextSettle() {
@@ -498,6 +526,22 @@ internal class Store {
             envelope = entry.envelope,
             len = entry.bytes.size,
         )
+
+        /**
+         * Stores [waker] as the one waker a handle holds for one kind of key,
+         * or, when [ready], adds it to [wake] at once and stores nothing; the
+         * return is what the slot holds next. A stored waker of another task
+         * is displaced onto [wake], so that task does not wait on a
+         * registration that can no longer fire. The same waker is a refresh:
+         * it is kept or replaced without being woken, because a task
+         * registers on every poll (ADR-0021 decision 13).
+         */
+        fun replace(stored: Waker?, waker: Waker, ready: Boolean, wake: MutableList<Waker>): Waker? {
+            if (stored != null && stored !== waker) wake += stored
+            if (!ready) return waker
+            wake += waker
+            return null
+        }
 
         /** Copies [bytes] into [out] from its position, or throws `Short` and writes nothing. */
         fun copyInto(bytes: ByteArray, out: ByteBuffer) {

@@ -78,7 +78,7 @@ import kotlin.reflect.full.isSubclassOf
  *
  * The rows are transcribed from `crates/ridl-rt/src` of the pinned release,
  * except `port::Wakeable`, `port::Interest` and `error::Transport::Busy`,
- * which are transcribed from ridl `main` at c0fa57c (story E11.16) ahead of
+ * which are transcribed from ridl `main` at c2543c2 (story E11.16) ahead of
  * the release that carries them.
  * Two Rust items have no row: `payload::Ref` and `payload::Encoded`, the
  * borrow-checked proof that a value is decoded only from checked bytes, whose

@@ -21,13 +21,16 @@ supplies a `fixed`, and `failNextSettle` injects the one fault the runtime has.
 Stage K1c. `PortsTest` is `crates/ridl-loopback/tests/ports.rs` of the pinned
 release, test for test and name for name, plus the JVM-specific tests below.
 
-driftsys/ridlc-gen-kotlin#5 adds the keyed `Wakeable` of ridl `main` (story
-E11.16), on the three handles a task waits on, each for the keys of its role:
-`SourceHandle` for `Interest.Event`, `CallerHandle` for `Interest.Outcome` and
-`Interest.Slot`, `HandlerHandle` for `Interest.Claim`; the aggregate routes each
-key to its handle. `CallerHandle` also carries `Clock`. `WakeableTest` is the
-tests E11.16 added to `ports.rs`, under the same names, and three of its own: a
-forgotten call's waiter, the aggregate's routing, and the caller's clock.
+driftsys/ridlc-gen-kotlin#5 adds the `Wakeable` of ridl `main` (story E11.16, as
+c2543c2 left it). Every handle is `Wakeable`, and stores one waker per kind of
+key it observes: `SourceHandle` one `Event` waker, `HandlerHandle` one `Claim`
+waker, `CallerHandle` an `Outcome` waker with each call; any other kind, and
+`Slot`, is woken at once. The aggregate routes each key to the handle that
+observes it, and `CallerHandle` also carries `Clock`. Closing a handler returns
+the claims it held and had not settled to the waiting calls, in send order, and
+wakes the handlers that serve them (ADR-0021 decision 5). `WakeableTest` is the
+"Waking" tests of `ports.rs` at c2543c2, under the same names and in the same
+order.
 
 ## Where the code departs from the Rust loopback
 

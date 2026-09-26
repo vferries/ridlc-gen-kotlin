@@ -251,42 +251,48 @@ public interface CoherentSignals : SignalReader {
 }
 
 /**
- * Extension: a port that can wake a task. `ridl_rt::port::Wakeable`. A
- * runtime that serves a generated client that waits implements it.
+ * Extension: a port that can wake a task. `ridl_rt::port::Wakeable`. It is how
+ * a face that waits learns when to read a port again, and a runtime that
+ * serves a generated client that waits implements it.
  *
- * [wakeOn] stores [waker][Waker] under [what][Interest] on the handle it is
- * called on. The contract:
+ * No port method waits, so a task registers its interest here, reads the
+ * port, and returns when the read finds nothing; the runtime wakes the task
+ * when the thing it waits for may have changed, and the task reads the port
+ * again. The contract:
  *
- * - **One waker per key per handle.** A second `wakeOn` for a key the handle
- *   already holds replaces the stored waker and wakes the displaced one, so no
- *   task waits on a registration that can no longer fire. The same waker
- *   registered again under the same key is the same task registering again:
- *   it displaces nothing and wakes nothing, because a task registers on every
- *   poll.
+ * - **One waker per kind of key per handle.** [wakeOn] stores [waker][Waker]
+ *   on the handle it is called on, one for each kind — `Slot`, `Event`,
+ *   `Claim` — and an `Outcome` waker with its call. A change to any key of
+ *   that kind that the handle observes wakes the stored waker, so a task that
+ *   registers `Event(a)` and then `Event(b)` is woken by an occurrence of
+ *   either; the task reads the port again and finds out which.
+ * - **A refresh or a displacement.** A `wakeOn` with the waker already stored,
+ *   the same object, is a refresh: it replaces the stored waker without waking
+ *   it, because a task registers on every poll. A waker of another task
+ *   displaces the stored one, and the displaced waker is woken, so no task
+ *   waits on a registration that can no longer fire. A second task waiting for
+ *   the same events holds a second handle, and each handle's waiter is woken.
  * - **Woken at most once.** A stored waker is woken after every change of its
- *   key becomes visible, and is cleared when woken.
+ *   kind becomes visible, and is cleared when woken. A spurious wake is
+ *   allowed: a runtime with one unkeyed "something changed" source may wake
+ *   every waiter it holds on any change.
  * - **Register, then read.** The caller registers on every poll, and
  *   registers before it reads the port, so a change between the read and the
  *   return still wakes it.
  *
- * A second task waiting for the same interface's events holds a second
- * handle, and each handle's waiter is woken. A runtime with one "something
- * changed" source may wake every waiter it holds on any change: a spurious
- * wake costs one poll and a missed wake hangs a task. A runtime with no wake
- * source of its own does not implement this interface.
+ * [Interest.Event] and [Interest.Claim] are keyed per interface, because
+ * [EventSource.next] and [Handler.nextClaim] drain one queue whatever the
+ * ordinal, and the subscription and the served set already filter by member.
  */
 public interface Wakeable {
-    /** Registers [waker] to be woken when [what] changes. */
+    /** Wakes [waker] when the thing [what] names may have changed, under the contract above. */
     public fun wakeOn(what: Interest, waker: Waker)
 }
 
 /**
- * What a task waits for, as [Wakeable.wakeOn] keys it.
- * `ridl_rt::port::Interest`.
- *
- * [Event] and [Claim] are keyed per interface, not per member:
- * [EventSource.next] and [Handler.nextClaim] drain one queue whatever the
- * ordinal, and the subscription and the served set already filter by member.
+ * What a task waits for, as [Wakeable.wakeOn] takes it.
+ * `ridl_rt::port::Interest`. Sealed: a runtime handles every key, because an
+ * unknown key has no safe default.
  */
 public sealed interface Interest {
     /** The outcome of one call is known. */
