@@ -217,12 +217,17 @@ public class Loopback(
          * has no catalog descriptor to size a byte budget from, so the slot
          * count is its only bound (note F-9 of the async face design).
          *
-         * The generated face does not call `forget` yet, so a program calling
-         * through it over one runtime gets `SendError.Busy` from its
-         * seventeenth call on, unless it closes the caller handle, which
-         * forgets that handle's calls. The clients of
-         * driftsys/ridlc-gen-kotlin#7 forget each call once they have its
-         * outcome, which closes this limit.
+         * A forgotten call that no handler has claimed is withdrawn at once
+         * and gives its slot back, so calls to a member no handler serves do
+         * not fill the table for good; a claimed one keeps its slot until its
+         * settlement.
+         *
+         * The generated face does not call `forget` yet. Until the clients of
+         * driftsys/ridlc-gen-kotlin#7, which forget each call once they have
+         * its outcome, a caller using the poll face forgets a correlation once
+         * it has read the outcome — `port.forget(c.correlation)` — or it gets
+         * `SendError.Busy` from its seventeenth call on. Closing the caller
+         * handle forgets its calls too.
          */
         public const val SLOTS: Int = 16
     }

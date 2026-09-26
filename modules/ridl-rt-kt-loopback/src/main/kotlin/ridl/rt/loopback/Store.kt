@@ -23,6 +23,7 @@ import ridl.rt.correlate.Table
 import ridl.rt.correlate.Waiters
 import ridl.rt.error.CallError
 import ridl.rt.error.Contract
+import ridl.rt.error.Transport
 import ridl.rt.port.Changed
 import ridl.rt.port.Claim
 import ridl.rt.port.ClaimId
@@ -125,10 +126,11 @@ internal class Store {
      * outcome status, whether the call was forgotten, and its
      * `Interest.Outcome` waker are the table's.
      *
-     * A forgotten call keeps its entry until its slot is reclaimed, because
-     * the provider's side of the call is not the caller's to revoke: a claim
-     * already presented is still settled, and a call still waiting is still
-     * presented.
+     * A forgotten call that a handler holds keeps its entry until its
+     * settlement reclaims the slot, because a claim already presented is the
+     * provider's and is still settled. A forgotten call that no handler holds
+     * is withdrawn: its entry goes with its slot, at the `forget` for a
+     * waiting call and at the handler's close for a claimed one.
      */
     private class CallEntry(
         /** The call's correlation, which a closed caller's calls are forgotten by. */
@@ -144,6 +146,13 @@ internal class Store {
     ) {
         /** The bytes of a successful settlement. Empty until then. */
         var reply: ByteArray = ByteArray(0)
+
+        /**
+         * `true` once the caller forgot the call while a handler held it. The
+         * table keeps the same mark but has no query for it; a closed
+         * handler's claim is withdrawn rather than returned by this one.
+         */
+        var forgotten: Boolean = false
     }
 
     private var now = Timestamp(0)
@@ -405,18 +414,61 @@ internal class Store {
 
     /**
      * Releases the caller's interest in a correlation, the one operation that
-     * frees a slot. A settled call's slot is reclaimed now. A call still in
-     * flight keeps its slot and is marked forgotten: the provider still sees
-     * it and still settles it, and the slot is reclaimed when that settlement
-     * lands. Either way the correlation answers `null` from `ack` and `reply`
-     * afterwards. A waiter on the outcome of a call in flight is woken: no
-     * outcome will be recorded for it.
+     * frees a slot. What it does depends on where the call is:
+     *
+     * - **Settled**: nothing is left to happen to it, so its slot is
+     *   reclaimed now.
+     * - **Claimed by a handler and not settled**: it is marked forgotten and
+     *   keeps its slot. The provider still settles it, and the slot is
+     *   reclaimed when that settlement lands. If the handler is closed first,
+     *   [closeHandler] withdraws the call instead of returning it.
+     * - **Waiting, claimed by no handler**: it is withdrawn. It leaves the
+     *   waiting calls, so no handler is ever presented it, and its slot is
+     *   reclaimed now. A call to a member no handler serves is never settled,
+     *   so without this its slot would be lost for the life of the runtime.
+     *   This is this runtime's behaviour, not a port contract: a transport
+     *   that has already sent a request cannot recall it.
+     *
+     * Either way the correlation answers `null` from `ack` and `reply`
+     * afterwards. A waiter on the outcome of a call in flight is woken, and a
+     * withdrawal wakes every caller's `Slot` waiter, as any reclaim does, and
+     * no handler's `Claim` waiter, because it adds no call to claim.
      */
     fun forget(c: Correlation, wake: MutableList<Waker>) {
+        if (pending.remove(c)) return withdraw(c, wake)
         when (val forgotten = table.forget(c)) {
             Forgotten.Reclaimed -> reclaimed(c, wake)
-            is Forgotten.Marked -> forgotten.waker?.let(wake::add)
+            is Forgotten.Marked -> {
+                forgotten.waker?.let(wake::add)
+                entry(c).forgotten = true
+            }
             Forgotten.Unknown -> {}
+        }
+    }
+
+    /**
+     * Withdraws a call that no handler holds and that is not among the
+     * waiting calls: the table settles it and, when the caller has not
+     * forgotten it yet, forgets it, which reclaims its slot either way. Both
+     * run under the one monitor, so no reader sees the settlement in between.
+     * Two paths reach it: [forget] of a waiting call, just taken out of the
+     * queue, and [closeHandler] for a claim whose call the caller forgot while
+     * the closed handler held it.
+     */
+    private fun withdraw(c: Correlation, wake: MutableList<Waker>) {
+        // The table discards this outcome with the slot, so no reader sees it.
+        // `Undelivered` is what happened: no provider settled the call.
+        when (val settled = table.settle(c, Result.failure(Transport.Undelivered))) {
+            // A waiting call, which the caller forgets now.
+            is Settled.Recorded -> {
+                settled.waker?.let(wake::add)
+                check(table.forget(c) == Forgotten.Reclaimed) { "the call was settled just above" }
+                reclaimed(c, wake)
+            }
+            // A call the caller forgot while a handler held it, withdrawn at
+            // that handler's close: the settlement reclaims the slot.
+            Settled.Reclaimed -> reclaimed(c, wake)
+            Settled.Unknown -> error("a withdrawn call is in flight")
         }
     }
 
@@ -434,10 +486,12 @@ internal class Store {
 
     /**
      * Removes a closed caller, its `Slot` waker first, and forgets every call
-     * it sent and did not forget: a settled one's slot is reclaimed now, and
-     * one still in flight is marked, so its settlement reclaims the slot. No
-     * handle can read the outcome of a call whose caller is gone, and a slot
-     * kept for it would be lost to every other caller.
+     * it sent and did not forget, under the rule of [forget]: a settled one's
+     * slot is reclaimed now, one no handler has claimed is withdrawn and its
+     * slot reclaimed now, and one a handler has claimed is marked, so its
+     * settlement reclaims the slot. No handle can read the outcome of a call
+     * whose caller is gone, and a slot kept for it would be lost to every
+     * other caller.
      */
     fun closeCaller(id: Int, wake: MutableList<Waker>) {
         callers.remove(id)
@@ -456,9 +510,12 @@ internal class Store {
      * Removes a closed handler. Every claim it held and had not settled
      * returns to the waiting calls, in its place by send order, so another
      * handler that serves the member can take it, and every handler that
-     * serves the member has its `Claim` waker returned. The handler's own
-     * state goes first, so the return never wakes its own waker. The loopback
-     * enforces no deadline on the returned call.
+     * serves the member has its `Claim` waker returned. A claim whose call
+     * the caller forgot is withdrawn instead, as [forget] withdraws a waiting
+     * call: its slot is reclaimed now, no handler is presented it again, and
+     * no `Claim` waker is woken for it. The handler's own state goes first, so
+     * the return never wakes its own waker. The loopback enforces no deadline
+     * on the returned call.
      */
     fun closeHandler(id: Int, wake: MutableList<Waker>) {
         handlers.remove(id)
@@ -466,6 +523,10 @@ internal class Store {
         for (claim in held) {
             val owner = claims.remove(claim)!!
             val entry = entry(owner.call)
+            if (entry.forgotten) {
+                withdraw(owner.call, wake)
+                continue
+            }
             val at = pending.indexOfFirst { entry(it).sent > entry.sent }.let { if (it < 0) pending.size else it }
             pending.add(at, owner.call)
             wakeHandlersServing(entry.key, wake)

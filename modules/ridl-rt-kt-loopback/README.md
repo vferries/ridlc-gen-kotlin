@@ -40,10 +40,15 @@ it (ridl `main` at eb41a7a). A send with every slot taken throws
 `SendError.Busy` on every caller and draws no sequence number. `forget`, or the
 close of the caller that sent the call, is what frees a slot, and a freed slot
 wakes every caller's `Slot` waker; a `Slot` registration while a slot is free is
-woken at once. A returned claim goes back in send order, which a reused slot's
-correlation does not give. `WakeableTest` is the "Waking" and "The bounded call
-table" tests of `ports.rs` at eb41a7a, under the same names and in the same
-order.
+woken at once. A forgotten call that no handler has claimed is withdrawn at once
+(ridl `main` at 5ac7082): it is never presented, and its slot comes back, so
+calls to a member no handler serves do not fill the table for good. A claimed
+one keeps its slot until its settlement, and a handler closed while it holds a
+forgotten call withdraws that call rather than returning it. The withdrawal is
+this runtime's behaviour, not a port contract. A returned claim goes back in
+send order, which a reused slot's correlation does not give. `WakeableTest` is
+the "Waking" and "The bounded call table" tests of `ports.rs` at 5ac7082, under
+the same names and in the same order.
 
 ## Where the code departs from the Rust loopback
 
