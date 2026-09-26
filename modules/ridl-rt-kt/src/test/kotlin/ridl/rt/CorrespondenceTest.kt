@@ -81,7 +81,9 @@ import kotlin.reflect.full.isSubclassOf
  * `port::Wakeable`, `port::Interest` and `error::Transport::Busy` at c2543c2
  * (story E11.16), and `sample::Continuity`, `sample::TrackerFull`,
  * `sample::EventSeqTracker`, `contract::Unsized`, `Member::call_deadline`,
- * `Member::reservation` and `Encoding::max_size` at 87de8c6 (story E11.19).
+ * `Member::reservation` and `Encoding::max_size` at 87de8c6 (story E11.19),
+ * and `correlate` with `error::ClientError` and `error::ProviderError` at
+ * eb41a7a (story E11.18).
  * Two Rust items have no row: `payload::Ref` and `payload::Encoded`, the
  * borrow-checked proof that a value is decoded only from checked bytes, whose
  * guarantee [Payload] gives by taking the view `verify` returned.
@@ -152,6 +154,16 @@ class CorrespondenceTest {
             extends = listOf(CallError::class),
         ),
         Row("ridl_rt::error::CallError", CallError::class, variants = listOf("Contract", "Transport")),
+        Row("ridl_rt::error::ClientError", ridl.rt.error.ClientError::class, variants = listOf("Send", "Call", "Read")),
+        Row("ridl_rt::error::ProviderError", ridl.rt.error.ProviderError::class, variants = listOf("Serve", "Claim")),
+        // correlate
+        Row(
+            "ridl_rt::correlate::Table", ridl.rt.correlate.Table::class,
+            members = listOf("insert", "settle", "outcome", "forget", "wake_on"),
+        ),
+        Row("ridl_rt::correlate::Settled", ridl.rt.correlate.Settled::class, variants = listOf("Recorded", "Reclaimed", "Unknown")),
+        Row("ridl_rt::correlate::Forgotten", ridl.rt.correlate.Forgotten::class, variants = listOf("Reclaimed", "Marked", "Unknown")),
+        Row("ridl_rt::correlate::Waiters", ridl.rt.correlate.Waiters::class, members = listOf("register", "take", "take_all")),
         // sample
         Row("ridl_rt::sample::Timestamp", Timestamp::class),
         Row("ridl_rt::sample::Duration", Duration::class),

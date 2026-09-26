@@ -32,13 +32,15 @@ E11.16, c0fa57c and c2543c2), and `ridl.rt.task`, the spelling of
 `Waker` standing for `core::task::Waker`. `TaskTest` is
 `crates/ridl-rt/tests/task.rs`, case for case.
 
-Part of driftsys/ridlc-gen-kotlin#6 adds the runtime helpers of story E11.19
-(ridl `main` at 87de8c6): `Freshness.of`, `EventSeqTracker` with `Continuity`
-and `TrackerFull`, `Member.callDeadline`, `Member.reservation`, `tableBudget`
-with `Unsized`, and `Encoding.maxSize`. `FreshnessTest`, `EventSeqTrackerTest`,
-`BudgetTest` and `CallDeadlineTest` are `freshness.rs`, `event_seq.rs`,
-`budget.rs` and `call_deadline.rs`, case for case. The correlation table of
-story E11.18 is the rest of #6 and waits on it.
+driftsys/ridlc-gen-kotlin#6 adds the runtime helpers of story E11.19 (ridl
+`main` at 87de8c6): `Freshness.of`, `EventSeqTracker` with `Continuity` and
+`TrackerFull`, `Member.callDeadline`, `Member.reservation`, `tableBudget` with
+`Unsized`, and `Encoding.maxSize`; and those of story E11.18 (eb41a7a):
+`ridl.rt.correlate`, the call `Table` with `Settled` and `Forgotten` and the
+`Waiters` registry, and the composed `ClientError` and `ProviderError`.
+`FreshnessTest`, `EventSeqTrackerTest`, `BudgetTest`, `CallDeadlineTest` and
+`CorrelateTest` are `freshness.rs`, `event_seq.rs`, `budget.rs`,
+`call_deadline.rs` and `correlate.rs`, case for case.
 
 ## Where the code departs from docs/design.md
 
@@ -79,6 +81,14 @@ story E11.18 is the rest of #6 and waits on it.
   every error type is. `EventSeqTracker(capacity)` takes at run time the `N`
   Rust takes as a const generic, so `event_seq.rs`'s const-context case has no
   spelling here.
+- **`correlate.Table(capacity, budget)`** takes at run time the `N` Rust takes
+  as a const generic, and refuses more than 65536 slots with an
+  `IllegalArgumentException` where Rust refuses to compile. An outcome is a
+  Kotlin `Result<Unit>` carrying a `CallError`, as `Caller.ack` is, and
+  `Waiters.takeAll` returns a list. `correlate.rs`'s reference-count checks and
+  const-context case have no JVM spelling.
+- **`ClientError` and `ProviderError` have no `From` conversions**: Kotlin has
+  no `?`, so a variant is built from its inner error directly.
 - **`Transport.Busy` breaks an exhaustive `when`.** `Transport` is
   `#[non_exhaustive]` in Rust, so adding `Busy` breaks nothing there; a Kotlin
   sealed class has no such marker, and a `when` over `Transport` or `CallError`
