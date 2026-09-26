@@ -17,15 +17,21 @@ package ridl.rt.loopback
 
 import ridl.rt.contract.InterfaceNo
 import ridl.rt.contract.Ordinal
+import ridl.rt.correlate.Forgotten
+import ridl.rt.correlate.Settled
+import ridl.rt.correlate.Table
+import ridl.rt.correlate.Waiters
 import ridl.rt.error.CallError
 import ridl.rt.error.Contract
 import ridl.rt.port.Changed
 import ridl.rt.port.Claim
 import ridl.rt.port.ClaimId
 import ridl.rt.port.Correlation
+import ridl.rt.port.Interest
 import ridl.rt.port.RawOccurrence
 import ridl.rt.port.RawSample
 import ridl.rt.port.ReadError
+import ridl.rt.port.SendError
 import ridl.rt.port.SettleError
 import ridl.rt.port.Watermark
 import ridl.rt.sample.Cause
@@ -111,32 +117,33 @@ internal class Store {
     }
 
     /** A presented claim: the call it presented, and the handler holding it. */
-    private class ClaimOwner(val call: Long, val handler: Int)
+    private class ClaimOwner(val call: Correlation, val handler: Int)
 
-    /** One sent call, from the caller's send to the provider's settlement. */
+    /**
+     * What the loopback keeps for one sent call, by its slot in the call
+     * table, from the caller's send until the table reclaims the slot. The
+     * outcome status, whether the call was forgotten, and its
+     * `Interest.Outcome` waker are the table's.
+     *
+     * A forgotten call keeps its entry until its slot is reclaimed, because
+     * the provider's side of the call is not the caller's to revoke: a claim
+     * already presented is still settled, and a call still waiting is still
+     * presented.
+     */
     private class CallEntry(
+        /** The call's correlation, which a closed caller's calls are forgotten by. */
+        val correlation: Correlation,
+        /** The caller handle that sent the call. */
+        val caller: Int,
         val kind: CallKind,
         val key: Key,
         val args: ByteArray,
         val envelope: Envelope,
+        /** The call's place in send order, which a returned claim goes back in by; a reused slot's correlation does not give it. */
+        val sent: Long,
     ) {
-        /** `null` while unsettled; otherwise the reply bytes or the [CallError]. */
-        var outcome: Result<ByteArray>? = null
-
-        /**
-         * `true` once the caller released the correlation. The entry stays:
-         * a call already sent is the provider's, and is still presented and
-         * settled. What changes is that `ack` and `reply` answer `null`.
-         */
-        var forgotten: Boolean = false
-
-        /**
-         * The call's `Interest.Outcome` waker, taken and woken when the
-         * outcome is recorded or the call is forgotten. It is kept with the
-         * call rather than on the caller handle, because the correlation is
-         * the key.
-         */
-        var waiter: Waker? = null
+        /** The bytes of a successful settlement. Empty until then. */
+        var reply: ByteArray = ByteArray(0)
     }
 
     private var now = Timestamp(0)
@@ -145,11 +152,20 @@ internal class Store {
     private val fixed = TreeMap<Key, ByteArray>()
     private val sources = TreeMap<Int, SourceState>()
     private var nextSourceId = 0
-    private val calls = TreeMap<Long, CallEntry>()
 
-    /** The calls waiting to be presented, by call identity, which is send order. */
-    private val pending = TreeSet<Long>()
-    private var nextCallId = 0L
+    /** The call table: `Loopback.SLOTS` slots and no byte budget (note F-9). */
+    private val table = Table(Loopback.SLOTS, null)
+
+    /** The calls the table holds, by slot. */
+    private val calls = TreeMap<Int, CallEntry>()
+
+    /** The calls sent and not yet presented, in send order. */
+    private val pending = ArrayList<Correlation>()
+    private var nextSent = 0L
+
+    /** Each open caller's `Interest.Slot` waker, from [openCaller] to [closeCaller]. */
+    private val callers = TreeMap<Int, Waiters>()
+    private var nextCallerId = 0
 
     /**
      * The calls presented and not yet settled, by a claim identity minted by
@@ -342,67 +358,96 @@ internal class Store {
     // -- calls --------------------------------------------------------------
 
     /**
-     * Queues a call for presentation, and returns its correlation and the
-     * `Claim` waker of every handler that serves the member, whatever
-     * interface that waker was registered under.
+     * Takes a slot in the call table and queues the call for presentation, and
+     * returns its correlation and the `Claim` waker of every handler that
+     * serves the member, whatever interface that waker was registered under.
+     *
+     * @throws SendError.Busy when every slot is taken.
      */
-    fun send(kind: CallKind, key: Key, args: ByteArray, seq: ULong): Pair<Correlation, List<Waker>> {
-        val id = nextCallId++
-        calls[id] = CallEntry(kind, key, args, Envelope(now, seq))
-        pending += id
+    fun send(caller: Int, kind: CallKind, key: Key, args: ByteArray, seq: ULong): Pair<Correlation, List<Waker>> {
+        // No budget, so the reservation is not read.
+        val c = table.insert(0u) ?: throw SendError.Busy
+        calls[Table.slot(c)] = CallEntry(c, caller, kind, key, args, Envelope(now, seq), nextSent++)
+        pending += c
         val wake = mutableListOf<Waker>()
         wakeHandlersServing(key, wake)
-        return Correlation(id) to wake
+        return c to wake
     }
+
+    /** The entry of a call the table holds. */
+    private fun entry(c: Correlation): CallEntry = calls.getValue(Table.slot(c))
 
     /**
      * Stores a call's `Interest.Outcome` waker, or wakes it at once when the
-     * outcome is already recorded or when no call in flight has that
-     * correlation, an unknown or a forgotten one, because no outcome will
-     * ever be recorded for it.
+     * outcome is already recorded or no call in flight has that correlation —
+     * an unknown or forgotten one. The table decides which.
      */
     fun waitOutcome(c: Correlation, waker: Waker, wake: MutableList<Waker>) {
-        val entry = calls[c.value]
-        if (entry == null || entry.forgotten) {
-            wake += waker
-            return
-        }
-        entry.waiter = replace(entry.waiter, waker, entry.outcome != null, wake)
+        table.wakeOn(c, waker)?.let(wake::add)
     }
 
     fun ack(c: Correlation): Result<Unit>? {
-        val entry = calls[c.value] ?: return null
+        // The table answers `null` for a call in flight, forgotten, or not
+        // held; a correlation it answers for has its entry here.
+        val outcome = table.outcome(c) ?: return null
         // A query's correlation always answers `null` here: its outcome comes from `reply`.
-        if (entry.forgotten || entry.kind != CallKind.Command) return null
-        return entry.outcome?.map { }
+        return outcome.takeIf { entry(c).kind == CallKind.Command }
     }
 
     fun reply(c: Correlation, out: ByteBuffer): Result<Int>? {
-        val entry = calls[c.value] ?: return null
-        if (entry.forgotten) return null
-        val outcome = entry.outcome ?: return null
-        return outcome.map { bytes ->
+        val outcome = table.outcome(c) ?: return null
+        return outcome.map {
+            val bytes = entry(c).reply
             copyInto(bytes, out)
             bytes.size
         }
     }
 
     /**
-     * Releases the caller's interest. A settled call's entry goes; a call in
-     * flight is marked forgotten and goes when its settlement lands. Either
-     * way `ack` and `reply` answer `null` afterwards. A waiter on the outcome
-     * of a call in flight is woken: no outcome will be recorded for it, so it
-     * would otherwise never be.
+     * Releases the caller's interest in a correlation, the one operation that
+     * frees a slot. A settled call's slot is reclaimed now. A call still in
+     * flight keeps its slot and is marked forgotten: the provider still sees
+     * it and still settles it, and the slot is reclaimed when that settlement
+     * lands. Either way the correlation answers `null` from `ack` and `reply`
+     * afterwards. A waiter on the outcome of a call in flight is woken: no
+     * outcome will be recorded for it.
      */
     fun forget(c: Correlation, wake: MutableList<Waker>) {
-        val entry = calls[c.value] ?: return
-        if (entry.outcome != null) {
-            calls.remove(c.value)
-        } else {
-            entry.forgotten = true
-            entry.waiter?.let(wake::add)
-            entry.waiter = null
+        when (val forgotten = table.forget(c)) {
+            Forgotten.Reclaimed -> reclaimed(c, wake)
+            is Forgotten.Marked -> forgotten.waker?.let(wake::add)
+            Forgotten.Unknown -> {}
         }
+    }
+
+    /**
+     * Drops what the loopback kept for a reclaimed slot, and takes every
+     * caller's `Slot` waker: the first to send again takes the slot, and the
+     * others find the table full and register again (note F-5, no queue).
+     */
+    private fun reclaimed(c: Correlation, wake: MutableList<Waker>) {
+        calls.remove(Table.slot(c))
+        for (waiters in callers.values) waiters.take(Interest.Slot)?.let(wake::add)
+    }
+
+    fun openCaller(): Int = nextCallerId++.also { callers[it] = Waiters() }
+
+    /**
+     * Removes a closed caller, its `Slot` waker first, and forgets every call
+     * it sent and did not forget: a settled one's slot is reclaimed now, and
+     * one still in flight is marked, so its settlement reclaims the slot. No
+     * handle can read the outcome of a call whose caller is gone, and a slot
+     * kept for it would be lost to every other caller.
+     */
+    fun closeCaller(id: Int, wake: MutableList<Waker>) {
+        callers.remove(id)
+        for (c in calls.values.filter { it.caller == id }.map { it.correlation }) forget(c, wake)
+    }
+
+    /** Stores a caller's `Interest.Slot` waker, or wakes it at once when a slot is free or the caller is closed. */
+    fun waitSlot(id: Int, waker: Waker, wake: MutableList<Waker>) {
+        val waiters = callers[id] ?: return run { wake += waker }
+        register(waiters, Interest.Slot, waker, calls.size < Loopback.SLOTS, wake)
     }
 
     fun openHandler(): Int = nextHandlerId++.also { handlers[it] = HandlerState() }
@@ -420,8 +465,10 @@ internal class Store {
         val held = claims.filterValues { it.handler == id }.keys.toList()
         for (claim in held) {
             val owner = claims.remove(claim)!!
-            pending += owner.call
-            wakeHandlersServing(calls.getValue(owner.call).key, wake)
+            val entry = entry(owner.call)
+            val at = pending.indexOfFirst { entry(it).sent > entry.sent }.let { if (it < 0) pending.size else it }
+            pending.add(at, owner.call)
+            wakeHandlersServing(entry.key, wake)
         }
     }
 
@@ -440,7 +487,8 @@ internal class Store {
 
     /**
      * Adds members to a handler's served set. A call already waiting that the
-     * handler now serves wakes its `Claim` waker.
+     * handler now serves wakes its `Claim` waker; with none waiting, the waker
+     * stays stored.
      */
     fun serve(handler: Int, iface: InterfaceNo, ords: List<Ordinal>, wake: MutableList<Waker>) {
         val state = handlers[handler] ?: return
@@ -463,7 +511,7 @@ internal class Store {
     }
 
     /** Whether a call is waiting that `nextClaim` would present to this handler: the same scan it makes. */
-    private fun claimWaiting(state: HandlerState): Boolean = pending.any { state.serves(calls.getValue(it).key) }
+    private fun claimWaiting(state: HandlerState): Boolean = pending.any { state.serves(entry(it).key) }
 
     /**
      * Presents the next waiting call this handler serves: every waiting call
@@ -471,12 +519,12 @@ internal class Store {
      */
     fun nextClaim(handler: Int, out: ByteBuffer): Claim? {
         val state = handlers[handler] ?: return null
-        val id = pending.firstOrNull { state.serves(calls.getValue(it).key) } ?: return null
-        val entry = calls.getValue(id)
+        val c = pending.firstOrNull { state.serves(entry(it).key) } ?: return null
+        val entry = entry(c)
         copyInto(entry.args, out)
         val claimId = nextClaimId++
-        pending.remove(id)
-        claims[claimId] = ClaimOwner(id, handler)
+        pending.remove(c)
+        claims[claimId] = ClaimOwner(c, handler)
         // No response bound: a bound is a member's timing, and the loopback
         // has no member table to read one from.
         return Claim(ClaimId(claimId), entry.key.iface, entry.key.ord, entry.envelope, null, entry.args.size)
@@ -485,10 +533,11 @@ internal class Store {
     /**
      * Records a claim's outcome. The claim is looked up before an injected
      * failure is consumed, and an injected failure leaves the claim
-     * settleable.
+     * settleable. A recorded outcome wakes the call's `Outcome` waker; the
+     * settlement of a call the caller forgot records nothing and reclaims its
+     * slot.
      */
-    /** A recorded outcome returns the call's `Outcome` waker, to wake once the monitor is left. */
-    fun settle(handler: Int, claim: ClaimId, outcome: Result<ByteArray>): Waker? {
+    fun settle(handler: Int, claim: ClaimId, outcome: Result<ByteArray>, wake: MutableList<Waker>) {
         val owner = claims[claim.value]
         // A claim another handler holds is unknown to this one.
         if (owner == null || owner.handler != handler) throw SettleError.UnknownClaim
@@ -497,13 +546,16 @@ internal class Store {
             throw SettleError.TooLarge(0)
         }
         claims.remove(claim.value)
-        val entry = calls.getValue(owner.call)
-        if (entry.forgotten) {
-            calls.remove(owner.call)
-            return null
+        when (val settled = table.settle(owner.call, outcome.map { })) {
+            is Settled.Recorded -> {
+                outcome.onSuccess { entry(owner.call).reply = it }
+                settled.waker?.let(wake::add)
+            }
+            // The caller released it while it was in flight: it was still
+            // presented and is still settled, and the slot goes with it.
+            Settled.Reclaimed -> reclaimed(owner.call, wake)
+            Settled.Unknown -> error("a claim names a call in flight")
         }
-        entry.outcome = outcome
-        return entry.waiter.also { entry.waiter = null }
     }
 
     fun failNextSettle() {
@@ -536,6 +588,17 @@ internal class Store {
          * it is kept or replaced without being woken, because a task
          * registers on every poll (ADR-0021 decision 13).
          */
+        /**
+         * Stores [waker] as a handle's one waker of [what]'s kind in
+         * [waiters], or, when [ready], adds it to [wake] at once and leaves
+         * that kind empty, with the refresh and displacement rules of
+         * `Waiters.register`.
+         */
+        fun register(waiters: Waiters, what: Interest, waker: Waker, ready: Boolean, wake: MutableList<Waker>) {
+            waiters.register(what, waker)?.let(wake::add)
+            if (ready) waiters.take(what)?.let(wake::add)
+        }
+
         fun replace(stored: Waker?, waker: Waker, ready: Boolean, wake: MutableList<Waker>): Waker? {
             if (stored != null && stored !== waker) wake += stored
             if (!ready) return waker

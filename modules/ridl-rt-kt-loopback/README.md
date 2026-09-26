@@ -28,12 +28,21 @@ gives, plus the JVM-specific tests below.
 driftsys/ridlc-gen-kotlin#5 adds the `Wakeable` of ridl `main` (story E11.16, as
 c2543c2 left it). Every handle is `Wakeable`, and stores one waker per kind of
 key it observes: `SourceHandle` one `Event` waker, `HandlerHandle` one `Claim`
-waker, `CallerHandle` an `Outcome` waker with each call; any other kind, and
-`Slot`, is woken at once. The aggregate routes each key to the handle that
-observes it, and `CallerHandle` also carries `Clock`. Closing a handler returns
-the claims it held and had not settled to the waiting calls, in send order, and
-wakes the handlers that serve them (ADR-0021 decision 5). `WakeableTest` is the
-"Waking" tests of `ports.rs` at c2543c2, under the same names and in the same
+waker, `CallerHandle` an `Outcome` waker with each call and one `Slot` waker;
+any other kind is woken at once. The aggregate routes each key to the handle
+that observes it, and `CallerHandle` also carries `Clock`. Closing a handler
+returns the claims it held and had not settled to the waiting calls, in send
+order, and wakes the handlers that serve them (ADR-0021 decision 5).
+
+The call table is `ridl-rt-kt`'s `correlate.Table`, with `Loopback.SLOTS`
+(sixteen) slots and no byte budget, as story E11.18 moved the Rust loopback onto
+it (ridl `main` at eb41a7a). A send with every slot taken throws
+`SendError.Busy` on every caller and draws no sequence number. `forget`, or the
+close of the caller that sent the call, is what frees a slot, and a freed slot
+wakes every caller's `Slot` waker; a `Slot` registration while a slot is free is
+woken at once. A returned claim goes back in send order, which a reused slot's
+correlation does not give. `WakeableTest` is the "Waking" and "The bounded call
+table" tests of `ports.rs` at eb41a7a, under the same names and in the same
 order.
 
 ## Where the code departs from the Rust loopback
@@ -43,10 +52,15 @@ order.
   reader handle is safe from any thread; the other five hold unsynchronized
   state of their own and are driven by one thread at a time, which is a rule of
   use, not something the compiler checks.
-- **`SourceHandle` and `HandlerHandle` are `AutoCloseable`.** The Rust handles
-  remove their queue and their waiter from the store on drop; the JVM has no
-  drop, so `close()` does it, and a source never closed keeps receiving copies
-  while the runtime lives.
+- **`SourceHandle`, `CallerHandle` and `HandlerHandle` are `AutoCloseable`.**
+  The Rust handles remove their state from the store on drop — a source its
+  queue and waiter, a caller its `Slot` waiter and the calls it did not forget,
+  a handler its waiter and the claims it held — and the JVM has no drop, so
+  `close()` does it. A source never closed keeps receiving copies while the
+  runtime lives, and a caller never closed keeps the slots of the calls it did
+  not forget. With no destructor, no JVM handle is closed by dropping a waker,
+  so the three `..._drops_without_deadlock` tests of `ports.rs` have no Kotlin
+  spelling.
 - **`split()` cannot consume the aggregate**, so the aggregate's port methods
   throw `IllegalStateException` after it; the factories and the test controls
   still work.

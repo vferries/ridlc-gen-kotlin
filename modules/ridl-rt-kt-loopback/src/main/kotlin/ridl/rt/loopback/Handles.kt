@@ -12,16 +12,17 @@
 // | `WriterHandle`  | `SignalWriter`                                                                 | none                           | one thread at a time |
 // | `SourceHandle`  | `EventSource`                                                                  | `Event`, one waker             | one thread at a time |
 // | `SinkHandle`    | `EventSink`                                                                    | none                           | one thread at a time |
-// | `CallerHandle`  | `Clock`, `Caller`                                                              | `Outcome`, kept with each call | one thread at a time |
+// | `CallerHandle`  | `Clock`, `Caller`                                                              | `Outcome` with each call, `Slot` | one thread at a time |
 // | `HandlerHandle` | `Handler`                                                                      | `Claim`, one waker             | one thread at a time |
 //
 // `Wakeable` is on every handle, because each handle wakes its own waiters. A
 // handle stores a waker only under a kind of key one of its roles observes:
 // one waker per kind for `Event` and `Claim`, which a change to any key of
 // that kind wakes (ADR-0021 decision 13), and an `Outcome` waker with its
-// call. A registration under any other kind is woken at once, because nothing
-// that handle could read changes under it. `Slot` is woken at once too, and
-// never stored, because the call table has no bound and a slot is always free.
+// call, and the caller one `Slot` waker, which a reclaimed slot of the call
+// table wakes and a free slot wakes at once. A registration under any other
+// kind is woken at once, because nothing that handle could read changes under
+// it.
 // `CallerHandle` carries `Clock`, because a client that waits for an outcome
 // within a bound reads the clock of the port it calls (ADR-0023 decision 6).
 //
@@ -205,12 +206,18 @@ public class SinkHandle internal constructor(
 /**
  * The `Caller` port role. One counter for the whole handle: on a call the
  * sequence is the caller's (ADR-0021 decision 5), which is what keeps two
- * callers on one provider from colliding.
+ * callers on one provider from colliding. A send the full call table refuses
+ * with `SendError.Busy` draws no number.
+ *
+ * [close] does what the Rust handle's drop does: it removes the caller's
+ * `Slot` waker, then forgets every call it sent and did not forget, so their
+ * slots come back to the other callers.
  */
 public class CallerHandle internal constructor(
     private val store: Store,
     override val catalog: CatalogRef,
-) : Caller, Clock, Wakeable {
+) : Caller, Clock, Wakeable, AutoCloseable {
+    private val id: Int = store.locked { openCaller() }
     private var seq: ULong = 0u
 
     override fun command(iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation =
@@ -220,9 +227,9 @@ public class CallerHandle internal constructor(
         send(CallKind.Query, iface, ord, args)
 
     private fun send(kind: CallKind, iface: InterfaceNo, ord: Ordinal, args: ByteBuffer): Correlation {
-        seq += 1u
-        val next = seq
-        val (correlation, wakers) = store.locked { send(kind, Key(iface, ord), args.remainingBytes(), next) }
+        val next = seq + 1u
+        val (correlation, wakers) = store.locked { send(id, kind, Key(iface, ord), args.remainingBytes(), next) }
+        seq = next
         wake(wakers)
         return correlation
     }
@@ -235,17 +242,26 @@ public class CallerHandle internal constructor(
         wake(store.wakeList { forget(c, it) })
     }
 
+    override fun close() {
+        wake(store.wakeList { closeCaller(id, it) })
+    }
+
     override fun now(): Timestamp = store.locked { now() }
 
     /**
      * Stores an `Outcome` waker with its call: the settlement or the `forget`
-     * of the call wakes it, and an outcome already known, or a correlation no
-     * call in flight has, wakes it at once. `Slot` is woken at once, because
-     * nothing here is bounded, and so is every other kind.
+     * of the call, or the close of this caller, wakes it, and an outcome
+     * already known, or a correlation no call in flight has, wakes it at once.
+     * Stores the one `Slot` waker while every slot of the call table is
+     * taken, which a reclaimed slot wakes, and wakes it at once while a slot
+     * is free. Every other kind is woken at once.
      */
     override fun wakeOn(what: Interest, waker: Waker) {
-        if (what !is Interest.Outcome) return waker.wake()
-        wake(store.wakeList { waitOutcome(what.correlation, waker, it) })
+        when (what) {
+            is Interest.Outcome -> wake(store.wakeList { waitOutcome(what.correlation, waker, it) })
+            Interest.Slot -> wake(store.wakeList { waitSlot(id, waker, it) })
+            is Interest.Event, is Interest.Claim -> waker.wake()
+        }
     }
 }
 
@@ -282,7 +298,7 @@ public class HandlerHandle internal constructor(
 
     override fun settle(claim: ClaimId, outcome: Result<ByteBuffer>) {
         val stored = outcome.toStored()
-        store.locked { settle(id, claim, stored) }?.wake()
+        wake(store.wakeList { settle(id, claim, stored, it) })
     }
 
     /**

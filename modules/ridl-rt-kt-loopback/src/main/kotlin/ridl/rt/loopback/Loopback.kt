@@ -54,9 +54,11 @@ public class Handles internal constructor(
  * payload bytes are opaque to it. It holds no catalog descriptor, so it
  * never reports `NotOwner`, never a `Contract` error except from an
  * unprovisioned [readFixed], and every value's freshness is `Unbounded`.
- * Nothing detaches and nothing is bounded, so `Detached`, `Busy` and
- * `TooLarge` never appear outside [failNextSettle]; a `Transport.Busy` reaches
- * a caller only when a provider settles a call with it.
+ * Nothing detaches, so `Detached` never appears. The one bound is the call
+ * table's [SLOTS]: a send with every slot taken throws `SendError.Busy`.
+ * Nothing else is bounded, so `TooLarge` appears only from [failNextSettle],
+ * and a `Transport.Busy` reaches a caller only when a provider settles a call
+ * with it.
  *
  * The catalog is carried and never compared: checking it against an
  * interface's own is a generated face's job (ADR-0021 decision 3).
@@ -201,4 +203,27 @@ public class Loopback(
     override fun nextClaim(out: ByteBuffer): Claim? = handles.handler.nextClaim(out)
 
     override fun settle(claim: ClaimId, outcome: Result<ByteBuffer>): Unit = handles.handler.settle(claim, outcome)
+
+    public companion object {
+        /**
+         * The number of calls the runtime holds at once: sent, and not yet
+         * released by `Caller.forget` or by the close of the caller handle
+         * that sent them. A settled call keeps its slot until it is released.
+         * With every slot taken, `command` and `query` throw `SendError.Busy`
+         * on every caller handle, because the table is the runtime's.
+         *
+         * Sixteen is small on purpose, so a test reaches it in a few sends and
+         * a program that never forgets a call finds out at once. The loopback
+         * has no catalog descriptor to size a byte budget from, so the slot
+         * count is its only bound (note F-9 of the async face design).
+         *
+         * The generated face does not call `forget` yet, so a program calling
+         * through it over one runtime gets `SendError.Busy` from its
+         * seventeenth call on, unless it closes the caller handle, which
+         * forgets that handle's calls. The clients of
+         * driftsys/ridlc-gen-kotlin#7 forget each call once they have its
+         * outcome, which closes this limit.
+         */
+        public const val SLOTS: Int = 16
+    }
 }
