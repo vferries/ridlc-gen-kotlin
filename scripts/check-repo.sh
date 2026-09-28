@@ -79,7 +79,7 @@ for relative_path in "${required_readmes[@]}"; do
 done
 
 release="$(tr -d '[:space:]' < "$root_dir/modules/conformance/ridl-release")"
-if [[ ! "$release" =~ ^editor-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ ! "$release" =~ ^(editor-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   printf 'modules/conformance/ridl-release is not a ridl release tag: %s\n' "$release" >&2
   exit 1
 fi
